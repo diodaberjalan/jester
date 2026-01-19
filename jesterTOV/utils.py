@@ -32,6 +32,7 @@ hbarc = 197.3269804593025  # Reduced Planck constant × c [MeV⋅fm]
 m_p = 938.2720881604904  # Proton mass
 m_n = 939.5654205203889  # Neutron mass
 m_e = 0.510998  # Electron mass
+m_muon = 105.6584 # Muon mass
 m = (m_p + m_n) / 2.0  # Average nucleon mass (Margueron et al.)
 
 # Derived constants

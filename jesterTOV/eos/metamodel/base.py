@@ -1,6 +1,7 @@
 r"""Meta-model equation of state for nuclear matter."""
-
+import jax
 import jax.numpy as jnp
+import optimistix as optx
 from jax.scipy.special import factorial
 from jaxtyping import Array, Float, Int
 
@@ -56,7 +57,7 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
         min_n_crust_nsat: Float = 2e-13,
         ndat_spline: Int = 10,
         # proton fraction
-        proton_fraction: bool | float | None = None,
+        proton_fraction: bool | float | str | None = None,
     ):
         r"""
         Initialize the meta-model EOS with nuclear empirical parameters.
@@ -147,8 +148,14 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
         if isinstance(proton_fraction, float):
             self.proton_fraction_val = proton_fraction
             self.proton_fraction = lambda x, y: self.proton_fraction_val
+            self.with_muon = False
+            print(f"Proton fraction fixed to {self.proton_fraction_val}")
+        elif proton_fraction == 'exact':
+            self.proton_fraction = lambda x, y: self.compute_proton_fraction_exact(x, y)
+            self.with_muon = True
         else:
             self.proton_fraction = lambda x, y: self.compute_proton_fraction(x, y)
+            self.with_muon = False
 
         # Constructions
         assert (
@@ -289,7 +296,7 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
         )
 
     # TODO: improve type hinting here
-    def construct_eos(self, NEP_dict: dict) -> tuple:
+    def construct_eos(self, NEP_dict: dict, return_proton_fraction = None) -> tuple:
         r"""
         Construct the complete equation of state from nuclear empirical parameters.
 
@@ -352,7 +359,7 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
                 Z_sat + self.v_sat_4_no_NEP,
             ]
         )
-
+        self.v_sat = v_sat
         # v_sym2 is defined in equations (27) to (31) in the Margueron et al. paper
         v_sym2 = jnp.array(
             [
@@ -363,10 +370,17 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
                 Z_sym + self.v_sym2_4_no_NEP,
             ]
         )
-
+        self.v_sym2 = v_sym2
         # Auxiliaries first
         x = self.compute_x(self.n_metamodel)
-        proton_fraction = self.proton_fraction(coefficient_sym, self.n_metamodel)
+        
+        if self.with_muon == True:
+            proton_fraction, e_fraction, muon_fraction = self.proton_fraction(coefficient_sym, self.n_metamodel)
+        else:
+            proton_fraction = self.proton_fraction(coefficient_sym, self.n_metamodel)
+            e_fraction = None
+            muon_fraction = None
+            
         delta = 1 - 2 * proton_fraction
 
         f_1 = self.compute_f_1(delta)
@@ -393,8 +407,8 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
             f_star3,
             b,
             v,
+            e_fraction,
         )
-
         # Spline for speed of sound for the connection region
         cs2_spline = jnp.append(jnp.array(self.cs2_crust), cs2_metamodel)
 
@@ -416,8 +430,14 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
         e = mu * n - p
 
         ns, ps, hs, es, dloge_dlogps = self.interpolate_eos(n, p, e)
+        
+        if return_proton_fraction == True:
+            output = ns, ps, hs, es, dloge_dlogps, mu, cs2, [self.n_metamodel, proton_fraction, e_fraction, muon_fraction] 
+            print(f"Proton fraction printed as output")
+        else:
+            output = ns, ps, hs, es, dloge_dlogps, mu, cs2
+        return output
 
-        return ns, ps, hs, es, dloge_dlogps, mu, cs2
 
     #################
     ### AUXILIARY ###
@@ -483,6 +503,26 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
             potential_energy += v.at[alpha].get() / (factorial(alpha)) * x**alpha * u
 
         return kinetic_energy + potential_energy
+        
+    def compute_energy_simple(
+        self,
+        n_n: Array,
+        n_p: Array,
+    ) -> Array:
+
+        x = self.compute_x(n_n+n_p)
+        proton_fraction = n_p/(n_n+n_p)
+        
+        delta = 1 - 2 * proton_fraction
+        f_1 = self.compute_f_1(delta)
+        f_star = self.compute_f_star(delta)
+        f_star2 = self.compute_f_star2(delta)
+        f_star3 = self.compute_f_star3(delta)
+        v = self.compute_v(self.v_sat, self.v_sym2, delta)
+        b = self.compute_b(delta)
+        e_metamodel = self.compute_energy(x, f_1, f_star, f_star2, f_star3, b, v)
+        return e_metamodel
+
 
     def esym(self, coefficient_sym: list, x: Array):
         # TODO: change this to be self-consistent: see Rahul's approach for that.
@@ -547,6 +587,7 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
         f_star3: Array,
         b: Array,
         v: Array,
+        e_fraction: Array | None = None,
     ):
 
         ### Compute incompressibility
@@ -598,28 +639,66 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
 
         K = K_kin + K_pot + 18 / n * p
 
-        # For electron
+        proton_fraction = (1-delta)/2
+        K_Fb = (3.0 * jnp.pi**2 / 2.0 * n) ** (1.0 / 3.0) * utils.hbarc        
+        if e_fraction is None:
+            # Case: Electron only
+            e_fraction = proton_fraction
+            K_Fe = (3.0 * (jnp.pi**2) *n*e_fraction) ** (1.0 / 3.0) * utils.hbarc
+            C_e = utils.m_e**4 / (8.0 * jnp.pi**2) / utils.hbarc**3
+            x_e = K_Fe / utils.m_e
+            f = x_e * (1 + 2 * x_e**2) * jnp.sqrt(1 + x_e**2) - jnp.arcsinh(x_e)
+    
+            e_electron = C_e * f
+            p_electron = -e_electron + 8.0 / 3.0 * C_e * x_e**3 * jnp.sqrt(1 + x_e**2)
+            K_electron = 8 * C_e / n * x_e**3 * (3 + 4 * x_e**2) / (
+                jnp.sqrt(1 + x_e**2)
+            ) - 9 / n * (e_electron + p_electron)
+            
+            K_lepton = K_electron
+            e_lepton = e_electron
+            p_lepton = p_electron
+        else:
+            # Case: Both electron and muon
+            # For electron
+            muon_fraction = jnp.maximum(1e-25, proton_fraction - e_fraction) # Avoid zero divs
 
-        K_Fb = (3.0 * jnp.pi**2 / 2.0 * n) ** (1.0 / 3.0) * utils.hbarc
-        K_Fe = K_Fb * (1.0 - delta) ** (1.0 / 3.0)
-        C = utils.m_e**4 / (8.0 * jnp.pi**2) / utils.hbarc**3
-        x = K_Fe / utils.m_e
-        f = x * (1 + 2 * x**2) * jnp.sqrt(1 + x**2) - jnp.arcsinh(x)
+            K_Fe = (3.0 * (jnp.pi**2) *n*e_fraction) ** (1.0 / 3.0) * utils.hbarc
+            C_e = utils.m_e**4 / (8.0 * jnp.pi**2) / utils.hbarc**3
+            x_e = K_Fe / utils.m_e
+            f = x_e * (1 + 2 * x_e**2) * jnp.sqrt(1 + x_e**2) - jnp.arcsinh(x_e)
+    
+            e_electron = C_e * f
+            p_electron = -e_electron + 8.0 / 3.0 * C_e * x_e**3 * jnp.sqrt(1 + x_e**2)
+            K_electron = 8 * C_e / n * x_e**3 * (3 + 4 * x_e**2) / (
+                jnp.sqrt(1 + x_e**2)
+            ) - 9 / n * (e_electron + p_electron)
 
-        e_electron = C * f
-        p_electron = -e_electron + 8.0 / 3.0 * C * x**3 * jnp.sqrt(1 + x**2)
-        K_electron = 8 * C / n * x**3 * (3 + 4 * x**2) / (
-            jnp.sqrt(1 + x**2)
-        ) - 9 / n * (e_electron + p_electron)
+            # Muon
+            K_Fmu = (3.0 * (jnp.pi**2) *n*muon_fraction) ** (1.0 / 3.0) * utils.hbarc
+            C_mu = utils.m_muon**4 / (8.0 * jnp.pi**2) / utils.hbarc**3
+            x_mu = K_Fmu / utils.m_muon
+            f = x_mu * (1 + 2 * x_mu**2) * jnp.sqrt(1 + x_mu**2) - jnp.arcsinh(x_mu)
+    
+            e_muon = C_mu * f
+            p_muon = -e_muon + 8.0 / 3.0 * C_mu * x_mu**3 * jnp.sqrt(1 + x_mu**2)
+            K_muon = 8 * C_mu / n * x_mu**3 * (3 + 4 * x_mu**2) / (
+                jnp.sqrt(1 + x_mu**2)
+            ) - 9 / n * (e_muon + p_muon)
 
-        # Sum together:
-        K_tot = K + K_electron
+            K_lepton = K_electron + K_muon
+            e_lepton = e_electron + e_muon
+            p_lepton = p_electron + p_muon
+
+        K_tot = K + K_lepton
+
 
         # Finally, get cs2:
         chi = K_tot / 9.0
 
-        total_energy_density = (e + utils.m) * n + e_electron
-        total_pressure = p + p_electron
+        total_energy_density = (e + utils.m) * n + e_lepton
+        total_pressure = p + p_lepton
+
         h_tot = (total_energy_density + total_pressure) / n
 
         cs2 = chi / h_tot
@@ -689,3 +768,91 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
         ).sum(axis=1)
         proton_fraction = jnp.power(physical_ys, 3)
         return proton_fraction
+
+    def compute_proton_fraction_exact(
+        self, coefficient_sym: list, n: Array
+    ) -> Float[Array, "n_points"]:
+        r"""
+        """
+        def muElec(ne):
+        	kfe = jnp.power(3*jnp.pi*jnp.pi*ne,1.0/3.0)
+        	xe = utils.hbarc * kfe / utils.m_e
+        	mue = utils.m_e * jnp.sqrt(1 + xe*xe)
+        	return mue
+        def muMuon(nm):
+        	nmu_safe = jnp.clip(nm, 1e-12, None)
+        	kf = (3*jnp.pi*jnp.pi*nmu_safe)**(1/3)
+        	xm = utils.hbarc * kf / utils.m_muon
+        	mu = utils.m_muon * jnp.sqrt(1 + xm*xm)
+        	return mu
+        #compute_energy_simple(nn,np)
+        total_energy_density = lambda n_n,n_p: (n_n+n_p)*self.compute_energy_simple(n_n,n_p)
+        nu_p = jax.grad(total_energy_density, argnums = 1) 
+        nu_n = jax.grad(total_energy_density, argnums = 0)
+        def betaHMnpe_optimistix(guessYe, nb):
+            def fn(z,args=nb):
+                y = z
+                n_n = nb*(1-y)
+                n_p = nb*y
+                mue = muElec(nb * y)
+                mun = nu_n( n_n, n_p ) + utils.m_n
+                mup = nu_p( n_n, n_p ) + utils.m_p
+                f = mun - mup - mue
+                return f
+            # jax.debug.print("f: {f}", f=fn(0.04))
+            z0 = jnp.array(guessYe)
+            solver = optx.Bisection(rtol=1e-8, atol=1e-8)
+            solYe  = optx.root_find(fn, solver, z0, options=dict(lower=0, upper=1))
+            return solYe.value
+        def betaHMnpemu_optimistix(guess, nb):
+            def fn(z,args):
+                y1, y2 = z
+                y = y1 + y2
+                n_n = nb*(1-y)
+                n_p = nb*y
+                mun  = nu_n(n_n, n_p) + utils.m_n
+                mup  = nu_p(n_n, n_p) + utils.m_p
+                mue  = muElec(nb * y1)
+                mumu = muMuon(nb * y2)
+                f1 = mun - mup - mue
+                f2 = mumu - mue
+                return f1, f2
+            z0 = jnp.array(guess)
+            solver = optx.Newton(rtol=1e-8, atol=1e-8)
+            sol  = optx.root_find(fn, solver, z0, options=dict(lower=1e-12, upper=1))
+            return sol.value
+        @jax.jit
+        def calc_ye_all_jit(guess_val, nb_array):
+            return jax.vmap(lambda nb: betaHMnpe_optimistix(guess_val, nb))(nb_array)
+        @jax.jit
+        def calc_mu_filtered_jit(guess_vec, nb_filtered):
+            return jax.vmap(lambda nb: betaHMnpemu_optimistix(guess_vec, nb))(nb_filtered)
+        def combine_results(ye_arr, ymu_filtered, cond_mask):
+            ymu_full = jnp.zeros_like(ye_arr)
+            ymu_full = ymu_full.at[cond_mask].set(ymu_filtered[:, 1])
+            ye_updated = ye_arr.at[cond_mask].set(ymu_filtered[:, 0])
+            return jnp.stack([ye_updated, ymu_full], axis=1)
+            
+        guess = [0.04, 1.e-9] 
+        ye_arr = calc_ye_all_jit(guess[0], n)
+        cond = muElec(n * ye_arr) > utils.m_muon
+        nbArr_filtered = n[cond]
+        ymu_filtered_result = calc_mu_filtered_jit(guess, nbArr_filtered)
+        final_arr = combine_results(ye_arr, ymu_filtered_result, cond)
+
+        yp_arr = final_arr[:, 0] + final_arr[:, 1]
+        
+        ye_array = jnp.array(final_arr[:, 0])
+        ymu_array = jnp.array(final_arr[:, 1])
+        yp_array = jnp.array(yp_arr)
+
+        
+        proton_fraction = yp_array
+        electron_fraction = ye_array
+        muon_fraction = ymu_array
+
+
+
+        
+        return proton_fraction, electron_fraction, muon_fraction
+
