@@ -3,9 +3,8 @@ import jax
 import jax.numpy as jnp
 from jax.scipy.special import factorial
 from jaxtyping import Array, Float, Int
-import optimistix as optx
 
-from . import utils, tov, ptov, STtov, eibitov, STtov_Greci
+from . import utils, tov, ptov, STtov
 
 ##############
 ### CRUSTS ###
@@ -165,7 +164,7 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
         min_n_crust_nsat: Float = 2e-13,
         ndat_spline: Int = 10,
         # proton fraction
-        proton_fraction: bool | float | str | None = None,
+        proton_fraction: bool | float | None = None,
     ):
         r"""
         Initialize the meta-model EOS with nuclear empirical parameters.
@@ -256,14 +255,9 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
         if isinstance(proton_fraction, float):
             self.proton_fraction_val = proton_fraction
             self.proton_fraction = lambda x, y: self.proton_fraction_val
-            self.with_muon = False
             print(f"Proton fraction fixed to {self.proton_fraction_val}")
-        elif proton_fraction == 'exact':
-            self.proton_fraction = lambda x, y: self.compute_proton_fraction_exact(x, y)
-            self.with_muon = True
         else:
             self.proton_fraction = lambda x, y: self.compute_proton_fraction(x, y)
-            self.with_muon = False
 
         # Constructions
         assert (
@@ -404,7 +398,7 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
             self.max_n_crust + 1e-5, self.nmin_MM, self.ndat_spline, endpoint=False
         )
 
-    def construct_eos(self, NEP_dict: dict, return_proton_fraction = None) -> tuple:
+    def construct_eos(self, NEP_dict: dict) -> tuple:
         r"""
         Construct the complete equation of state from nuclear empirical parameters.
 
@@ -467,7 +461,7 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
                 Z_sat + self.v_sat_4_no_NEP,
             ]
         )
-        self.v_sat = v_sat
+
         # v_sym2 is defined in equations (27) to (31) in the Margueron et al. paper
         v_sym2 = jnp.array(
             [
@@ -478,18 +472,10 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
                 Z_sym + self.v_sym2_4_no_NEP,
             ]
         )
-        self.v_sym2 = v_sym2
+
         # Auxiliaries first
         x = self.compute_x(self.n_metamodel)
-
-        
-        if self.with_muon == True:
-            proton_fraction, e_fraction, muon_fraction = self.proton_fraction(coefficient_sym, self.n_metamodel)
-        else:
-            proton_fraction = self.proton_fraction(coefficient_sym, self.n_metamodel)
-            e_fraction = None
-            muon_fraction = None
-        
+        proton_fraction = self.proton_fraction(coefficient_sym, self.n_metamodel)
         delta = 1 - 2 * proton_fraction
 
         f_1 = self.compute_f_1(delta)
@@ -502,7 +488,6 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
         # Other quantities
         p_metamodel = self.compute_pressure(x, f_1, f_star, f_star2, f_star3, b, v)
         e_metamodel = self.compute_energy(x, f_1, f_star, f_star2, f_star3, b, v)
-        # e_metamodel = self.compute_energy_exact_beta_eq(x, f_1, f_star, f_star2, f_star3, b, v)
 
         # Get cs2 for the metamodel
         cs2_metamodel = self.compute_cs2(
@@ -517,7 +502,6 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
             f_star3,
             b,
             v,
-            e_fraction,
         )
 
         # Spline for speed of sound for the connection region
@@ -541,12 +525,8 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
         e = mu * n - p
 
         ns, ps, hs, es, dloge_dlogps = self.interpolate_eos(n, p, e)
-        if return_proton_fraction == True:
-            output = ns, ps, hs, es, dloge_dlogps, mu, cs2, [self.n_metamodel, proton_fraction, e_fraction, muon_fraction] 
-            print(f"Proton fraction printed as output")
-        else:
-            output = ns, ps, hs, es, dloge_dlogps, mu, cs2
-        return output
+
+        return ns, ps, hs, es, dloge_dlogps, mu, cs2
 
     #################
     ### AUXILIARY ###
@@ -613,25 +593,6 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
 
         return kinetic_energy + potential_energy
 
-    def compute_energy_simple(
-        self,
-        n_n: Array,
-        n_p: Array,
-    ) -> Array:
-
-        x = self.compute_x(n_n+n_p)
-        proton_fraction = n_p/(n_n+n_p)
-        
-        delta = 1 - 2 * proton_fraction
-        f_1 = self.compute_f_1(delta)
-        f_star = self.compute_f_star(delta)
-        f_star2 = self.compute_f_star2(delta)
-        f_star3 = self.compute_f_star3(delta)
-        v = self.compute_v(self.v_sat, self.v_sym2, delta)
-        b = self.compute_b(delta)
-        e_metamodel = self.compute_energy(x, f_1, f_star, f_star2, f_star3, b, v)
-        return e_metamodel
-
     def esym(self, coefficient_sym: list, x: Array):
         # TODO: change this to be self-consistent: see Rahul's approach for that.
         return jnp.polyval(jnp.array(coefficient_sym[::-1]), x)
@@ -695,8 +656,8 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
         f_star3: Array,
         b: Array,
         v: Array,
-        e_fraction: Array | None = None
     ):
+
         ### Compute incompressibility
 
         # Kinetic part
@@ -746,66 +707,28 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
 
         K = K_kin + K_pot + 18 / n * p
 
+        # For electron
 
-        proton_fraction = (1-delta)/2
-        K_Fb = (3.0 * jnp.pi**2 / 2.0 * n) ** (1.0 / 3.0) * utils.hbarc        
+        K_Fb = (3.0 * jnp.pi**2 / 2.0 * n) ** (1.0 / 3.0) * utils.hbarc
+        K_Fe = K_Fb * (1.0 - delta) ** (1.0 / 3.0)
+        C = utils.m_e**4 / (8.0 * jnp.pi**2) / utils.hbarc**3
+        x = K_Fe / utils.m_e
+        f = x * (1 + 2 * x**2) * jnp.sqrt(1 + x**2) - jnp.arcsinh(x)
+
+        e_electron = C * f
+        p_electron = -e_electron + 8.0 / 3.0 * C * x**3 * jnp.sqrt(1 + x**2)
+        K_electron = 8 * C / n * x**3 * (3 + 4 * x**2) / (
+            jnp.sqrt(1 + x**2)
+        ) - 9 / n * (e_electron + p_electron)
+
         # Sum together:
-        if e_fraction is None:
-            # Case: Electron only
-            e_fraction = proton_fraction
-            K_Fe = (3.0 * (jnp.pi**2) *n*e_fraction) ** (1.0 / 3.0) * utils.hbarc
-            C_e = utils.m_e**4 / (8.0 * jnp.pi**2) / utils.hbarc**3
-            x_e = K_Fe / utils.m_e
-            f = x_e * (1 + 2 * x_e**2) * jnp.sqrt(1 + x_e**2) - jnp.arcsinh(x_e)
-    
-            e_electron = C_e * f
-            p_electron = -e_electron + 8.0 / 3.0 * C_e * x_e**3 * jnp.sqrt(1 + x_e**2)
-            K_electron = 8 * C_e / n * x_e**3 * (3 + 4 * x_e**2) / (
-                jnp.sqrt(1 + x_e**2)
-            ) - 9 / n * (e_electron + p_electron)
-            
-            K_lepton = K_electron
-            e_lepton = e_electron
-            p_lepton = p_electron
-        else:
-            # Case: Both electron and muon
-            # For electron
-            muon_fraction = proton_fraction-e_fraction
-
-            K_Fe = (3.0 * (jnp.pi**2) *n*e_fraction) ** (1.0 / 3.0) * utils.hbarc
-            C_e = utils.m_e**4 / (8.0 * jnp.pi**2) / utils.hbarc**3
-            x_e = K_Fe / utils.m_e
-            f = x_e * (1 + 2 * x_e**2) * jnp.sqrt(1 + x_e**2) - jnp.arcsinh(x_e)
-    
-            e_electron = C_e * f
-            p_electron = -e_electron + 8.0 / 3.0 * C_e * x_e**3 * jnp.sqrt(1 + x_e**2)
-            K_electron = 8 * C_e / n * x_e**3 * (3 + 4 * x_e**2) / (
-                jnp.sqrt(1 + x_e**2)
-            ) - 9 / n * (e_electron + p_electron)
-
-            # Muon
-            K_Fmu = (3.0 * (jnp.pi**2) *n*muon_fraction) ** (1.0 / 3.0) * utils.hbarc
-            C_mu = utils.m_muon**4 / (8.0 * jnp.pi**2) / utils.hbarc**3
-            x_mu = K_Fmu / utils.m_muon
-            f = x_mu * (1 + 2 * x_mu**2) * jnp.sqrt(1 + x_mu**2) - jnp.arcsinh(x_mu)
-    
-            e_muon = C_mu * f
-            p_muon = -e_muon + 8.0 / 3.0 * C_mu * x_mu**3 * jnp.sqrt(1 + x_mu**2)
-            K_muon = 8 * C_mu / n * x_mu**3 * (3 + 4 * x_mu**2) / (
-                jnp.sqrt(1 + x_mu**2)
-            ) - 9 / n * (e_muon + p_muon)
-
-            K_lepton = K_electron + K_muon
-            e_lepton = e_electron + e_muon
-            p_lepton = p_electron + p_muon
-        jax.debug.print("e_fraction: {x}", x=e_fraction)
-        K_tot = K + K_lepton
+        K_tot = K + K_electron
 
         # Finally, get cs2:
         chi = K_tot / 9.0
 
-        total_energy_density = (e + utils.m) * n + e_lepton
-        total_pressure = p + p_lepton
+        total_energy_density = (e + utils.m) * n + e_electron
+        total_pressure = p + p_electron
         h_tot = (total_energy_density + total_pressure) / n
 
         cs2 = chi / h_tot
@@ -875,202 +798,6 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
         proton_fraction = jnp.power(physical_ys, 3)
         return proton_fraction
 
-    def compute_proton_fraction_exact(
-        self, coefficient_sym: list, n: Array
-    ) -> Float[Array, "n_points"]:
-        r"""
-        """
-        def muElec(ne):
-        	kfe = jnp.power(3*jnp.pi*jnp.pi*ne,1.0/3.0)
-        	xe = utils.hbarc * kfe / utils.m_e
-        	mue = utils.m_e * jnp.sqrt(1 + xe*xe)
-        	return mue
-        def muMuon(nm):
-        	nmu_safe = jnp.clip(nm, 1e-12, None)
-        	kf = (3*jnp.pi*jnp.pi*nmu_safe)**(1/3)
-        	xm = utils.hbarc * kf / utils.m_muon
-        	mu = utils.m_muon * jnp.sqrt(1 + xm*xm)
-        	return mu
-        #compute_energy_simple(nn,np)
-        total_energy_density = lambda n_n,n_p: (n_n+n_p)*self.compute_energy_simple(n_n,n_p)
-        nu_p = jax.grad(total_energy_density, argnums = 1) 
-        nu_n = jax.grad(total_energy_density, argnums = 0)
-        def betaHMnpe_optimistix(guessYe, nb):
-            def fn(z,args=nb):
-                y = z
-                n_n = nb*(1-y)
-                n_p = nb*y
-                mue = muElec(nb * y)
-                mun = nu_n( n_n, n_p ) + utils.m_n
-                mup = nu_p( n_n, n_p ) + utils.m_p
-                f = mun - mup - mue
-                return f
-            # jax.debug.print("f: {f}", f=fn(0.04))
-            z0 = jnp.array(guessYe)
-            solver = optx.Bisection(rtol=1e-8, atol=1e-8)
-            solYe  = optx.root_find(fn, solver, z0, options=dict(lower=0, upper=1))
-            return solYe.value
-        def betaHMnpemu_optimistix(guess, nb):
-            def fn(z,args):
-                y1, y2 = z
-                y = y1 + y2
-                n_n = nb*(1-y)
-                n_p = nb*y
-                mun  = nu_n(n_n, n_p) + utils.m_n
-                mup  = nu_p(n_n, n_p) + utils.m_p
-                mue  = muElec(nb * y1)
-                mumu = muMuon(nb * y2)
-                f1 = mun - mup - mue
-                f2 = mumu - mue
-                return f1, f2
-            z0 = jnp.array(guess)
-            solver = optx.Newton(rtol=1e-8, atol=1e-8)
-            sol  = optx.root_find(fn, solver, z0, options=dict(lower=1e-12, upper=1))
-            return sol.value
-        @jax.jit
-        def calc_ye_all_jit(guess_val, nb_array):
-            return jax.vmap(lambda nb: betaHMnpe_optimistix(guess_val, nb))(nb_array)
-        @jax.jit
-        def calc_mu_filtered_jit(guess_vec, nb_filtered):
-            return jax.vmap(lambda nb: betaHMnpemu_optimistix(guess_vec, nb))(nb_filtered)
-        def combine_results(ye_arr, ymu_filtered, cond_mask):
-            ymu_full = jnp.zeros_like(ye_arr)
-            ymu_full = ymu_full.at[cond_mask].set(ymu_filtered[:, 1])
-            ye_updated = ye_arr.at[cond_mask].set(ymu_filtered[:, 0])
-            return jnp.stack([ye_updated, ymu_full], axis=1)
-            
-        guess = [0.04, 1.e-9] 
-        ye_arr = calc_ye_all_jit(guess[0], n)
-        cond = muElec(n * ye_arr) > utils.m_muon
-        nbArr_filtered = n[cond]
-        ymu_filtered_result = calc_mu_filtered_jit(guess, nbArr_filtered)
-        final_arr = combine_results(ye_arr, ymu_filtered_result, cond)
-
-        yp_arr = final_arr[:, 0] + final_arr[:, 1]
-        
-        ye_array = jnp.array(final_arr[:, 0])
-        ymu_array = jnp.array(final_arr[:, 1])
-        yp_array = jnp.array(yp_arr)
-
-        
-        proton_fraction = yp_array
-        electron_fraction = ye_array
-        muon_fraction = ymu_array
-        return proton_fraction, electron_fraction, muon_fraction
-
-class MetaModel_only(Interpolate_EOS_model):
-    r"""
-    Meta-model EOS combined with piecewise speed-of-sound extensions (CSE).
-
-    This class extends the meta-model approach by allowing for piecewise-constant
-    speed-of-sound extensions at high densities. This is useful for modeling
-    phase transitions or exotic matter components in neutron star cores that
-    may not be captured by the meta-model polynomial expansions.
-
-    The EOS is constructed in two regions:
-
-    1. **Low-to-intermediate density**: Meta-model approach (crust + core)
-    2. **High density**: Speed-of-sound extension scheme
-    """
-
-    def __init__(
-        self,
-        nsat: Float = 0.16,
-        nmin_MM_nsat: Float = 0.12 / 0.16,
-        nmax_nsat: Float = 12,
-        ndat_metamodel: Int = 100,
-        ndat_CSE: Int = 100,
-        **metamodel_kwargs,
-    ):
-        r"""
-        Initialize the MetaModel with CSE EOS combining meta-model and constant speed-of-sound extensions.
-
-        This constructor sets up a hybrid EOS that uses the meta-model approach for
-        low-to-intermediate densities and allows for user-defined constant speed-of-sound
-        extensions at high densities. The transition occurs at a break density specified
-        in the NEP dictionary during EOS construction.
-
-        Args:
-            nsat (Float, optional):
-                Nuclear saturation density :math:`n_0` [:math:`\mathrm{fm}^{-3}`].
-                Reference density for the meta-model construction. Defaults to 0.16.
-            nmin_MM_nsat (Float, optional):
-                Starting density for meta-model region as fraction of :math:`n_0`.
-                Must be above crust-core transition. Defaults to 0.75 (= 0.12/0.16).
-            nmax_nsat (Float, optional):
-                Maximum density for EOS construction in units of :math:`n_0`.
-                Defines the high-density reach including CSE region. Defaults to 12.
-            ndat_metamodel (Int, optional):
-                Number of density points for meta-model region discretization.
-                Higher values give smoother meta-model interpolation. Defaults to 100.
-            ndat_CSE (Int, optional):
-                Number of density points for constant speed-of-sound extension region.
-                Controls resolution of high-density exotic matter modeling. Defaults to 100.
-            **metamodel_kwargs:
-                Additional keyword arguments passed to the underlying MetaModel_EOS_model.
-                Includes parameters like kappas, v_nq, b_sat, b_sym, crust_name, etc.
-                See MetaModel_EOS_model.__init__ for complete parameter descriptions.
-
-        See Also:
-            MetaModel_EOS_model.__init__ : Base meta-model parameters
-            construct_eos : Method that defines CSE parameters and break density
-        """
-
-        self.nmax = nmax_nsat * nsat
-        self.ndat_CSE = ndat_CSE
-        self.nsat = nsat
-        self.nmin_MM_nsat = nmin_MM_nsat
-        self.ndat_metamodel = ndat_metamodel
-        self.metamodel_kwargs = metamodel_kwargs
-
-    def construct_eos(
-        self,
-        NEP_dict: dict,
-        ngrids: Float[Array, "n_grid_point"],
-        cs2grids: Float[Array, "n_grid_point"],
-    ) -> tuple:
-        r"""
-        Construct the EOS
-
-        Args:
-            NEP_dict (dict): Dictionary with the NEP keys to be passed to the metamodel EOS class.
-            ngrids (Float[Array, `n_grid_point`]): Density grid points of densities for the CSE part of the EOS.
-            cs2grids (Float[Array, `n_grid_point`]): Speed-of-sound squared grid points of densities for the CSE part of the EOS.
-
-        Returns:
-            tuple: EOS quantities (see Interpolate_EOS_model), as well as the chemical potential and speed of sound.
-        """
-
-        # Initializate the MetaModel part up to n_break
-        metamodel = MetaModel_EOS_model(
-            nsat=self.nsat,
-            nmin_MM_nsat=self.nmin_MM_nsat,
-            nmax_nsat=NEP_dict["nbreak"] / self.nsat,
-            ndat=self.ndat_metamodel,
-            **self.metamodel_kwargs,
-        )
-
-        # Construct the metamodel part:
-        mm_output = metamodel.construct_eos(NEP_dict, return_proton_fraction=True)
-        n_metamodel, p_metamodel, _, e_metamodel, _, mu_metamodel, cs2_metamodel, [n_metamodel_orig, proton_fraction, e_fraction, muon_fraction]  = (
-            mm_output
-        )
-
-        # Convert units back for CSE initialization
-        n_metamodel = n_metamodel / utils.fm_inv3_to_geometric
-        p_metamodel = p_metamodel / utils.MeV_fm_inv3_to_geometric
-        e_metamodel = e_metamodel / utils.MeV_fm_inv3_to_geometric
-
-        # Combine metamodel and CSE data
-        n = n_metamodel
-        p = p_metamodel
-        e = e_metamodel
-        mu = mu_metamodel
-        cs2 = cs2_metamodel
-
-        ns, ps, hs, es, dloge_dlogps = self.interpolate_eos(n, p, e)
-
-        return ns, ps, hs, es, dloge_dlogps, mu, cs2, [n_metamodel_orig, proton_fraction, e_fraction, muon_fraction]
 
 class MetaModel_with_CSE_EOS_model(Interpolate_EOS_model):
     r"""
@@ -1619,124 +1346,7 @@ def construct_family_nonGR(eos: tuple, ndat: Int = 50, min_nsat: Float = 2) -> t
 
     return jnp.log(pcs), ms, rs, lambdas
 
-def construct_family_eibi(eos: tuple, ndat: Int = 50, min_nsat: Float = 2) -> tuple[
-    Float[Array, "ndat"],
-    Float[Array, "ndat"],
-    Float[Array, "ndat"],
-    Float[Array, "ndat"],
-]:
-    r"""
-    Construct neutron star family in Eddington-inspired Born-Infeld (EiBI) gravity.
-    
-    This function generates a sequence of neutron star solutions by solving the modified
-    TOV equations in EiBI gravity across a range of central pressures. The EiBI framework
-    introduces a parameter $\kappa$ that modifies gravitational interactions, reducing to
-    standard General Relativity when $\kappa \to 0$.
-    
-    The solutions are computed for central pressures ranging from a minimum determined
-    by nuclear saturation density ($n_{\mathrm{sat}} = 0.16$ fm⁻³) to a maximum where
-    the equation of state becomes acausal (sound speed exceeds speed of light).
-    
-    The tidal deformability $\Lambda$ is calculated from the Love number $k_2$ and
-    compactness $C = M/R$ using:
-    
 
-    .. math::
-        \frac{dp}{dr} = -\frac{1}{4\pi\kappa} \frac{
-            \frac{r}{2\kappa}\left(\frac{1}{ab} + \frac{a}{b^3} - 2\right) + \frac{2m}{r^2} + \frac{\Lambda_{\mathrm{cosmo}} r}{3\lambda}
-        }{
-            \left[\frac{4}{A - B} + \frac{3}{B} + \frac{1}{A}\frac{de}{dp}\right]
-            \left[1 - \frac{2m}{r} - \frac{\Lambda_{\mathrm{cosmo}} r^2}{3\lambda}\right]
-        }
-    
-    where:
-    - $a = \sqrt{1 + 8\pi\kappa\varepsilon}$, $b = \sqrt{1 - 8\pi\kappa p}$
-    - $A = 1 + 8\pi\kappa\varepsilon$, $B = 1 - 8\pi\kappa p$
-    - $\lambda = \kappa\Lambda_{\mathrm{cosmo}} + 1$
-    
-    The mass equation becomes:
-    
-    .. math::
-        \frac{dm}{dr} = \frac{r^2}{4\kappa}\left(2 - \frac{3}{ab} + \frac{a}{b^3}\right)
-    
-    The resulting mass-radius relation is truncated at the maximum TOV mass and
-    interpolated to ensure uniform sampling.
-    
-    Args:
-        eos (tuple): Extended EOS tuple containing:
-            - ns: Baryon density array [fm⁻³]
-            - ps: Pressure array [geometric units]
-            - hs: Enthalpy array
-            - es: Energy density array [geometric units]
-            - dloge_dlogps: Derivative d(log ε)/d(log p)
-            - kappa: EiBI gravity parameter $\kappa$ [m²]
-            - Lambda_cosmo: Cosmological constant parameter
-        ndat (int, optional): Number of points in central pressure grid. Defaults to 50.
-        min_nsat (float, optional): Starting density in units of nuclear saturation density. 
-                                    Defaults to 2.
-    
-    Returns:
-        tuple: A tuple containing:
-            - $\log(p_c)$: Logarithm of central pressures [geometric units]
-            - $M$: Gravitational masses [$M_{\odot}$]
-            - $R$: Circumferential radii [km]
-            - $\Lambda$: Dimensionless tidal deformabilities
-    
-    Note:
-        The function automatically handles unit conversions from geometric units to
-        physical units (solar masses and kilometers) and ensures the resulting
-        mass-radius relation represents only stable configurations.
-    """
-
-    # Construct the dictionary
-    (
-        ns,
-        ps,
-        hs,
-        es,
-        dloge_dlogps,
-        kappa,
-        Lambda_cosmo,
-    ) = eos
-    eos_dict = dict(
-        p=ps,
-        h=hs,
-        e=es,
-        dloge_dlogp=dloge_dlogps,
-        kappa=kappa,
-        Lambda_cosmo=Lambda_cosmo,
-    )
-
-    # calculate the pc_min
-    pc_min = utils.interp_in_logspace(
-        min_nsat * 0.16 * utils.fm_inv3_to_geometric, ns, ps
-    )
-
-    # end at pc at pmax at which it is causal
-    cs2 = ps / es / dloge_dlogps
-    pc_max = eos_dict["p"][locate_lowest_non_causal_point(cs2)]
-
-    pcs = jnp.logspace(jnp.log10(pc_min), jnp.log10(pc_max), num=ndat)
-
-    def solve_single_pc(pc):
-        """Solve for single pc value"""
-        return eibitov.tov_solver(eos_dict, pc)
-
-    ms, rs, ks = jax.vmap(solve_single_pc)(pcs)
-
-    cs = ms / rs
-
-    # convert the mass to solar mass and the radius to km
-    ms /= utils.solar_mass_in_meter
-    rs /= 1e3
-
-    # calculate the tidal deformability
-    lambdas = 2.0 / 3.0 * ks * jnp.power(cs, -5.0)
-
-    pcs, ms, rs, lambdas = utils.limit_by_MTOV_and_interpolate(pcs, ms, rs, lambdas, ndat)
-
-    return jnp.log(pcs), ms, rs, lambdas
-    
 def construct_family_ST(eos: tuple, ndat: Int = 50, min_nsat: Float = 2) -> tuple[
     Float[Array, "ndat"],
     Float[Array, "ndat"],
@@ -1744,13 +1354,22 @@ def construct_family_ST(eos: tuple, ndat: Int = 50, min_nsat: Float = 2) -> tupl
     Float[Array, "ndat"],
 ]:
     r"""
+    # TODO:
     (updated later)
     """
 
     # Construct the dictionary
-    ns, ps, hs, es, dloge_dlogps, beta_STs, phi_cs, phi_inf_tgts = eos
-    #Here's EoS dict names defined 
-    eos_dict = dict(p=ps, h=hs, e=es, dloge_dlogp=dloge_dlogps, beta_ST = beta_STs, phi_c=phi_cs, phi_inf_tgt=phi_inf_tgts)
+    ns, ps, hs, es, dloge_dlogps, beta_STs, phi_cs, nu_cs = eos
+    # Here's EoS dict names defined
+    eos_dict = dict(
+        p=ps,
+        h=hs,
+        e=es,
+        dloge_dlogp=dloge_dlogps,
+        beta_ST=beta_STs,
+        phi_c=phi_cs,
+        nu_c=nu_cs,
+    )
 
     # calculate the pc_min
     pc_min = utils.interp_in_logspace(
@@ -1759,11 +1378,13 @@ def construct_family_ST(eos: tuple, ndat: Int = 50, min_nsat: Float = 2) -> tupl
 
     pc_max = eos_dict["p"][-1]
     pcs = jnp.logspace(jnp.log10(pc_min), jnp.log10(pc_max), num=ndat)
+
     def solve_single_pc(pc):
         """Solve for single pc value"""
         return STtov.tov_solver(eos_dict, pc)
+
     ms, rs, ks = jax.vmap(solve_single_pc)(pcs)
-    
+
     # calculate the compactness
     cs = ms / rs
 
@@ -1773,53 +1394,21 @@ def construct_family_ST(eos: tuple, ndat: Int = 50, min_nsat: Float = 2) -> tupl
 
     # calculate the tidal deformability
     lambdas = 2.0 / 3.0 * ks * jnp.power(cs, -5.0)
-    pcs, ms, rs, lambdas = utils.limit_by_MTOV_and_interpolate(pcs, ms, rs, lambdas, ndat)
-    
+
+    # Limit masses to be below MTOV
+    pcs, ms, rs, lambdas = utils.limit_by_MTOV(pcs, ms, rs, lambdas)
+
+    # Get a mass grid and interpolate, since we might have dropped provided some duplicate points
+    mass_grid = jnp.linspace(jnp.min(ms), jnp.max(ms), ndat)
+    rs = jnp.interp(mass_grid, ms, rs)
+    lambdas = jnp.interp(mass_grid, ms, lambdas)
+    pcs = jnp.interp(mass_grid, ms, pcs)
+
+    ms = mass_grid
+
     return jnp.log(pcs), ms, rs, lambdas
 
-def construct_family_ST_Greci(eos: tuple, ndat: Int = 50, min_nsat: Float = 2) -> tuple[
-    Float[Array, "ndat"],
-    Float[Array, "ndat"],
-    Float[Array, "ndat"],
-    Float[Array, "ndat"],
-]:
-    r"""
-    (updated later)
-    """
 
-    # Construct the dictionary
-    ns, ps, hs, es, dloge_dlogps, beta_STs, phi_cs, phi_inf_tgts = eos
-    #Here's EoS dict names defined 
-    eos_dict = dict(p=ps, h=hs, e=es, dloge_dlogp=dloge_dlogps, beta_ST = beta_STs, phi_c=phi_cs, phi_inf_tgt=phi_inf_tgts)
-
-    # calculate the pc_min
-    pc_min = utils.interp_in_logspace(
-        min_nsat * 0.16 * utils.fm_inv3_to_geometric, ns, ps
-    )
-
-    pc_max = eos_dict["p"][-1]
-    pcs = jnp.logspace(jnp.log10(pc_min), jnp.log10(pc_max), num=ndat)
-    def solve_single_pc(pc):
-        """Solve for single pc value"""
-        return STtov_Greci.tov_solver(eos_dict, pc)
-    #this one returns dimensionless Lambdas
-    ms, rs, LsT, LsS, LsST1, LsST2 = jax.vmap(solve_single_pc)(pcs)
-    
-    # calculate the compactness
-    cs = ms / rs
-
-    # convert the mass to solar mass and the radius to km
-
-    ms /= utils.solar_mass_in_meter
-    rs /= 1e3
-
-    # calculate the tidal deformability
-    # @TODO: Need more efficient interpolation + filtering
-    pcs, ms, rs, lambdasT = utils.limit_by_MTOV_and_interpolate(pcs, ms, rs, LsT, ndat)
-    _, _, _, lambdasS = utils.limit_by_MTOV_and_interpolate(pcs, ms, rs, LsS, ndat)
-    _, _, _, lambdasST1 = utils.limit_by_MTOV_and_interpolate(pcs, ms, rs, LsST1, ndat)
-    _, _, _, lambdasST2 = utils.limit_by_MTOV_and_interpolate(pcs, ms, rs, LsST2, ndat)
-    return jnp.log(pcs), ms, rs, lambdasT, lambdasS, lambdasST1, lambdasST2
 # For diagnostic, used in example file
 def construct_family_ST_sol(eos: tuple, ndat: Int = 1, min_nsat: Float = 2) -> tuple[
     Float[Array, "ndat"],
