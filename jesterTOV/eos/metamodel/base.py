@@ -58,6 +58,7 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
         ndat_spline: Int = 10,
         # proton fraction
         proton_fraction: bool | float | str | None = None,
+        calculate_durca: bool = False,
     ):
         r"""
         Initialize the meta-model EOS with nuclear empirical parameters.
@@ -296,7 +297,7 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
         )
 
     # TODO: improve type hinting here
-    def construct_eos(self, NEP_dict: dict, return_proton_fraction = None) -> tuple:
+    def construct_eos(self, NEP_dict: dict, return_proton_fraction = None, calculate_durca = False) -> tuple:
         r"""
         Construct the complete equation of state from nuclear empirical parameters.
 
@@ -373,7 +374,8 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
         self.v_sym2 = v_sym2
         # Auxiliaries first
         x = self.compute_x(self.n_metamodel)
-        
+        self.calculate_durca = calculate_durca
+        self.durca_density = [jnp.nan,jnp.nan,jnp.nan]
         if self.with_muon == True:
             proton_fraction, e_fraction, muon_fraction = self.proton_fraction(coefficient_sym, self.n_metamodel)
         else:
@@ -432,7 +434,7 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
         ns, ps, hs, es, dloge_dlogps = self.interpolate_eos(n, p, e)
         
         if return_proton_fraction == True:
-            output = ns, ps, hs, es, dloge_dlogps, mu, cs2, [self.n_metamodel, proton_fraction, e_fraction, muon_fraction] 
+            output = ns, ps, hs, es, dloge_dlogps, mu, cs2, [self.n_metamodel, proton_fraction, e_fraction, muon_fraction, self.durca_density] 
             print(f"Proton fraction printed as output")
         else:
             output = ns, ps, hs, es, dloge_dlogps, mu, cs2
@@ -851,8 +853,33 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
         electron_fraction = ye_array
         muon_fraction = ymu_array
 
-
-
+        # Direct Urca Process
+        def durca(guess):
+            def fd(z, args):
+                ye, ym, nb = z
+                y = ye + ym 
+                n_n = nb*(1-y)
+                n_p = nb*y
+                mue = muElec(nb * ye)
+                mun = nu_n( n_n, n_p ) + utils.m_n
+                mup = nu_p( n_n, n_p ) + utils.m_p
+                mumuon = muMuon(nb * ym)
+                f1 = (mun - mup - mue)/mun
+                f2 = (mue - mumuon)/mue
+                f3 = (jnp.cbrt(1-y) - jnp.cbrt(y) - jnp.cbrt(ye))/jnp.cbrt(1-y)
+                return f1, f2, f3 # normalized minimize conditons
         
+            z0  = jnp.array(guess)
+            solver = optx.Chord(rtol=1e-7, atol=1e-7)
+            sols   = optx.root_find(fd, solver, z0, throw=False)
+            final_residuals = fd(sols.value, None)
+        	
+            return sols.value, sols.stats, final_residuals
+        if self.calculate_durca is True:
+            guessDurca=[0.06, 0.06, 0.25]
+            solution, stats, residuals = durca(guessDurca)
+            self.durca_density = solution
+
+    
         return proton_fraction, electron_fraction, muon_fraction
 

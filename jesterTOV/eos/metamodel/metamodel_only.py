@@ -20,6 +20,7 @@ class MetaModel_only(Interpolate_EOS_model):
         nmax_nsat: Float = 12,
         ndat_metamodel: Int = 100,
         ndat_CSE: Int = 100,
+        calculate_durca: bool = False,
         **metamodel_kwargs,
     ):
         r"""
@@ -31,6 +32,7 @@ class MetaModel_only(Interpolate_EOS_model):
         self.nmin_MM_nsat = nmin_MM_nsat
         self.ndat_metamodel = ndat_metamodel
         self.metamodel_kwargs = metamodel_kwargs
+        self.calculate_durca = calculate_durca
 
     def construct_eos(
         self,
@@ -56,12 +58,13 @@ class MetaModel_only(Interpolate_EOS_model):
             nmin_MM_nsat=self.nmin_MM_nsat,
             nmax_nsat=NEP_dict["nbreak"] / self.nsat,
             ndat=self.ndat_metamodel,
+            calculate_durca = self.calculate_durca,
             **self.metamodel_kwargs,
         )
 
         # Construct the metamodel part:
-        mm_output = metamodel.construct_eos(NEP_dict, return_proton_fraction=True)
-        n_metamodel, p_metamodel, _, e_metamodel, _, mu_metamodel, cs2_metamodel, [n_metamodel_orig, proton_fraction, e_fraction, muon_fraction]  = (
+        mm_output = metamodel.construct_eos(NEP_dict, return_proton_fraction=True, calculate_durca = self.calculate_durca)
+        n_metamodel, p_metamodel, _, e_metamodel, _, mu_metamodel, cs2_metamodel, [n_metamodel_orig, proton_fraction, e_fraction, muon_fraction, durca_density]  = (
             mm_output
         )
 
@@ -79,4 +82,4 @@ class MetaModel_only(Interpolate_EOS_model):
 
         ns, ps, hs, es, dloge_dlogps = self.interpolate_eos(n, p, e)
 
-        return ns, ps, hs, es, dloge_dlogps, mu, cs2, [n_metamodel_orig, proton_fraction, e_fraction, muon_fraction]
+        return ns, ps, hs, es, dloge_dlogps, mu, cs2, [n_metamodel_orig, proton_fraction, e_fraction, muon_fraction, durca_density]
