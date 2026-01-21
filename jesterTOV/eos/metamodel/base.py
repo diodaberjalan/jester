@@ -870,7 +870,7 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
                 return f1, f2, f3 # normalized minimize conditons
         
             z0  = jnp.array(guess)
-            solver = optx.Chord(rtol=1e-7, atol=1e-7)
+            solver = optx.Newton(rtol=1e-7, atol=1e-7)
             sols   = optx.root_find(fd, solver, z0, throw=False)
             final_residuals = fd(sols.value, None)
         	
