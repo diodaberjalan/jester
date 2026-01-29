@@ -4,6 +4,8 @@ from ..config.schema import TransformConfig
 from .base import JesterTransformBase
 from .metamodel import MetaModelTransform
 from .metamodel_cse import MetaModelCSETransform
+from .metamodel_cse_eibi import MetaModelCSETransform as MetaModelCSEEibiTransform
+from .metamodel_cse_exactbetaeq import MetaModelCSETransform as MetaModelCSEExactBetaEqTransform
 from .spectral import SpectralTransform
 
 
@@ -50,7 +52,7 @@ def create_transform(
     'MM'
     """
     # Validate transform type early
-    if config.type not in ("metamodel", "metamodel_cse", "spectral"):
+    if config.type not in ("metamodel", "metamodel_cse", "metamodel_cse_eibi", "metamodel_cse_exactbetaeq", "spectral"):
         raise ValueError(f"Unknown transform type: {config.type}")
 
     # TODO: not all are common anymore, refactor later
@@ -82,7 +84,7 @@ def create_transform(
             ]
         elif config.type == "spectral":
             input_names = ["gamma_0", "gamma_1", "gamma_2", "gamma_3"]
-        else:  # metamodel_cse (already validated above)
+        else:  # metamodel_cse, metamodel_cse_eibi, or metamodel_cse_exactbetaeq (already validated above)
             input_names = [
                 "K_sat",
                 "Q_sat",
@@ -94,6 +96,9 @@ def create_transform(
                 "Z_sym",
                 "nbreak",
             ]
+            # Add kappa_eibi for EIBI variant
+            if config.type == "metamodel_cse_eibi":
+                input_names.append("kappa_eibi")
             # Add CSE grid parameters
             for i in range(config.nb_CSE):
                 input_names.extend([f"n_CSE_{i}_u", f"cs2_CSE_{i}"])
@@ -116,7 +121,21 @@ def create_transform(
             "n_points_high": config.n_points_high,
         }
         return SpectralTransform(name_mapping=name_mapping, **spectral_kwargs)
-    else:  # metamodel_cse
+    elif config.type == "metamodel_cse_eibi":
+        return MetaModelCSEEibiTransform(
+            name_mapping=name_mapping,
+            nb_CSE=config.nb_CSE,
+            max_nbreak_nsat=max_nbreak_nsat,
+            **common_kwargs,
+        )
+    elif config.type == "metamodel_cse_exactbetaeq":
+        return MetaModelCSEExactBetaEqTransform(
+            name_mapping=name_mapping,
+            nb_CSE=config.nb_CSE,
+            max_nbreak_nsat=max_nbreak_nsat,
+            **common_kwargs,
+        )
+    else:  # metamodel_cse (regular)
         return MetaModelCSETransform(
             name_mapping=name_mapping,
             nb_CSE=config.nb_CSE,
@@ -146,7 +165,7 @@ def get_transform_input_names(config: TransformConfig) -> list[str]:
     26  # 8 NEP + 1 nbreak + 8*2 CSE grid + 1 final cs2
     """
     # Validate transform type early
-    if config.type not in ("metamodel", "metamodel_cse", "spectral"):
+    if config.type not in ("metamodel", "metamodel_cse", "metamodel_cse_eibi", "metamodel_cse_exactbetaeq", "spectral"):
         raise ValueError(f"Unknown transform type: {config.type}")
 
     if config.type == "metamodel":
@@ -162,7 +181,7 @@ def get_transform_input_names(config: TransformConfig) -> list[str]:
         ]
     elif config.type == "spectral":
         return ["gamma_0", "gamma_1", "gamma_2", "gamma_3"]
-    else:  # metamodel_cse (already validated above)
+    else:  # metamodel_cse, metamodel_cse_eibi, or metamodel_cse_exactbetaeq (already validated above)
         names = [
             "K_sat",
             "Q_sat",
@@ -174,6 +193,9 @@ def get_transform_input_names(config: TransformConfig) -> list[str]:
             "Z_sym",
             "nbreak",
         ]
+        # Add kappa_eibi for EIBI variant
+        if config.type == "metamodel_cse_eibi":
+            names.append("kappa_eibi")
         # Add CSE grid parameters
         for i in range(config.nb_CSE):
             names.extend([f"n_CSE_{i}_u", f"cs2_CSE_{i}"])

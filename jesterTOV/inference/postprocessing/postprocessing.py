@@ -425,7 +425,7 @@ def make_mass_radius_plot(
         normalized_value = norm(prob[i])
         color = cmap(normalized_value)
 
-        plt.plot(
+        plt.scatter(
             r[i],
             m[i],
             color=color,

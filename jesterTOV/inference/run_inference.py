@@ -103,7 +103,11 @@ def setup_prior(config: InferenceConfig) -> CombinePrior:
     from .base.prior import UniformPrior, CombinePrior
 
     # Determine conditional parameters
-    nb_CSE = config.transform.nb_CSE if config.transform.type == "metamodel_cse" else 0
+    # Both metamodel_cse and metamodel_cse_eibi need CSE parameters
+    if config.transform.type in ["metamodel_cse", "metamodel_cse_eibi", "metamodel_cse_exactbetaeq"]:
+        nb_CSE = config.transform.nb_CSE
+    else:
+        nb_CSE = 0
 
     # Check if GW or NICER likelihoods are enabled (both need _random_key)
     # Note: gw_presampled does NOT need _random_key (uses fixed seed at init)

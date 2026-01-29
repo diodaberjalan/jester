@@ -7,7 +7,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float
 
 # Following the Jim/jimgw architecture - base class copied to remove dependency
-from jesterTOV.eos import construct_family
+from jesterTOV.eos import construct_family, construct_family_eibi
 from jesterTOV.inference.base import NtoMTransform
 from jesterTOV.inference.likelihoods.constraints import check_all_constraints
 from jesterTOV.logging_config import get_logger
@@ -115,6 +115,10 @@ class JesterTransformBase(NtoMTransform, ABC):
             x, ndat=self.ndat_TOV, min_nsat=self.min_nsat_TOV
         )
 
+        self.construct_family_lambda_eibi = lambda x: construct_family_eibi(
+            x, ndat=self.ndat_TOV, min_nsat=self.min_nsat_TOV
+        )
+
         # TODO: add support for passing fixed parameters, for injection studies
         # Fixed parameters (currently empty, but available for future use)
         self.fixed_params = {}
@@ -159,7 +163,26 @@ class JesterTransformBase(NtoMTransform, ABC):
             (logpc_EOS, masses_EOS, radii_EOS, Lambdas_EOS)
         """
         return self.construct_family_lambda(eos_tuple)
+        
+    def _solve_tov_eibi(
+        self, eos_tuple: tuple[Array, Array, Array, Array, Array, Array, Array, Array]
+    ) -> tuple[
+        Float[Array, " n"], Float[Array, " n"], Float[Array, " n"], Float[Array, " n"]
+    ]:
+        """Solve TOV equations for a given EOS.
 
+        Parameters
+        ----------
+        eos_tuple : tuple[Array, Array, Array, Array, Array, Array, Array, Array]
+            Tuple of (ns, ps, hs, es, dloge_dlogps, cs2,kappa_eibi, Lambda_cosmo) EOS arrays.
+
+        Returns
+        -------
+        tuple[Float[Array, " n"], Float[Array, " n"], Float[Array, " n"], Float[Array, " n"]]
+            (logpc_EOS, masses_EOS, radii_EOS, Lambdas_EOS)
+        """
+        return self.construct_family_lambda_eibi(eos_tuple)
+        
     def _create_return_dict(
         self,
         logpc_EOS: Float[Array, " n"],

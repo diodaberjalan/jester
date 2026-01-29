@@ -39,7 +39,7 @@ class TransformConfig(BaseModel):
         Name of crust model to use
     """
 
-    type: Literal["metamodel", "metamodel_cse", "spectral"]
+    type: Literal["metamodel", "metamodel_cse", "metamodel_cse_eibi", "metamodel_cse_exactbetaeq", "spectral"]
     ndat_metamodel: int = 100
     nmax_nsat: float = 25.0
     nb_CSE: int = 8  # Only for metamodel_cse
@@ -62,7 +62,7 @@ class TransformConfig(BaseModel):
         ):
             raise ValueError(
                 "nb_CSE must be 0 for type='metamodel' or type='spectral'. "
-                "Use type='metamodel_cse' for CSE extension."
+                "Use type='metamodel_cse' or 'metamodel_cse_eibi' 'metamodel_cse_exactbetaeq' for CSE extension."
             )
         return v
 

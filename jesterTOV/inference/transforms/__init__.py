@@ -13,4 +13,6 @@ __all__ = [
     "SpectralTransform",
     "create_transform",
     "get_transform_input_names",
+    "metamodel_cse_eibi",
+    "metamodel_cse_exactbetaeq",
 ]

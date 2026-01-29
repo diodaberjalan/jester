@@ -799,12 +799,12 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
                 mue = muElec(nb * y)
                 mun = nu_n( n_n, n_p ) + utils.m_n
                 mup = nu_p( n_n, n_p ) + utils.m_p
-                f = mun - mup - mue
+                f = (mun - mup - mue)/mun
                 return f
             # jax.debug.print("f: {f}", f=fn(0.04))
             z0 = jnp.array(guessYe)
-            solver = optx.Bisection(rtol=1e-8, atol=1e-8)
-            solYe  = optx.root_find(fn, solver, z0, options=dict(lower=0, upper=1))
+            solver = optx.Newton(rtol=1e-8, atol=1e-8)
+            solYe  = optx.root_find(fn, solver, z0, throw=False)
             return solYe.value
         def betaHMnpemu_optimistix(guess, nb):
             def fn(z,args):
@@ -816,31 +816,36 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
                 mup  = nu_p(n_n, n_p) + utils.m_p
                 mue  = muElec(nb * y1)
                 mumu = muMuon(nb * y2)
-                f1 = mun - mup - mue
-                f2 = mumu - mue
+                f1 = (mun - mup - mue)/mun
+                f2 = (mumu - mue)/mue
                 return f1, f2
             z0 = jnp.array(guess)
             solver = optx.Newton(rtol=1e-8, atol=1e-8)
-            sol  = optx.root_find(fn, solver, z0, options=dict(lower=1e-12, upper=1))
+            sol  = optx.root_find(fn, solver, z0, throw=False)
             return sol.value
         @jax.jit
         def calc_ye_all_jit(guess_val, nb_array):
             return jax.vmap(lambda nb: betaHMnpe_optimistix(guess_val, nb))(nb_array)
         @jax.jit
-        def calc_mu_filtered_jit(guess_vec, nb_filtered):
-            return jax.vmap(lambda nb: betaHMnpemu_optimistix(guess_vec, nb))(nb_filtered)
-        def combine_results(ye_arr, ymu_filtered, cond_mask):
-            ymu_full = jnp.zeros_like(ye_arr)
-            ymu_full = ymu_full.at[cond_mask].set(ymu_filtered[:, 1])
-            ye_updated = ye_arr.at[cond_mask].set(ymu_filtered[:, 0])
-            return jnp.stack([ye_updated, ymu_full], axis=1)
-            
-        guess = [0.04, 1.e-9] 
+        def calc_conditional_fractions(guess_vec, nb_full, cond_mask, ye_arr):
+            # Calculate fractions for all densities with conditional logic
+            def compute_for_single(nb, has_muon, ye):
+                # Use jax.lax.cond to choose which solver to use
+                result = jax.lax.cond(
+                    has_muon,
+                    lambda: betaHMnpemu_optimistix(guess_vec, nb),  # with muons
+                    lambda: jnp.array([ye, 0.0])  # electron-only, no muons
+                )
+                return result
+
+            # Vectorize over all densities
+            return jax.vmap(compute_for_single)(nb_full, cond_mask, ye_arr)
+
+        guess = [0.04, 1.e-9]
         ye_arr = calc_ye_all_jit(guess[0], n)
         cond = muElec(n * ye_arr) > utils.m_muon
-        nbArr_filtered = n[cond]
-        ymu_filtered_result = calc_mu_filtered_jit(guess, nbArr_filtered)
-        final_arr = combine_results(ye_arr, ymu_filtered_result, cond)
+        # Calculate fractions with conditional logic
+        final_arr = calc_conditional_fractions(guess, n, cond, ye_arr)
 
         yp_arr = final_arr[:, 0] + final_arr[:, 1]
         
@@ -853,33 +858,42 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
         electron_fraction = ye_array
         muon_fraction = ymu_array
 
-        # Direct Urca Process
-        def durca(guess):
-            def fd(z, args):
-                ye, ym, nb = z
-                y = ye + ym 
-                n_n = nb*(1-y)
-                n_p = nb*y
-                mue = muElec(nb * ye)
-                mun = nu_n( n_n, n_p ) + utils.m_n
-                mup = nu_p( n_n, n_p ) + utils.m_p
-                mumuon = muMuon(nb * ym)
-                f1 = (mun - mup - mue)/mun
-                f2 = (mue - mumuon)/mue
-                f3 = (jnp.cbrt(1-y) - jnp.cbrt(y) - jnp.cbrt(ye))/jnp.cbrt(1-y)
-                return f1, f2, f3 # normalized minimize conditons
+        # # Direct Urca Process
+        # def durca(guess):
+        #     def fd(z, args):
+        #         ye, ym, nb = z
+        #         y = ye + ym 
+        #         n_n = nb*(1-y)
+        #         n_p = nb*y
+        #         mue = muElec(nb * ye)
+        #         mun = nu_n( n_n, n_p ) + utils.m_n
+        #         mup = nu_p( n_n, n_p ) + utils.m_p
+        #         mumuon = muMuon(nb * ym)
+        #         f1 = (mun - mup - mue)/mun
+        #         f2 = (mue - mumuon)/mue
+        #         f3 = (jnp.cbrt(1-y) - jnp.cbrt(y) - jnp.cbrt(ye))/jnp.cbrt(1-y)
+        #         return f1, f2, f3 # normalized minimize conditons
         
-            z0  = jnp.array(guess)
-            solver = optx.Newton(rtol=1e-7, atol=1e-7)
-            sols   = optx.root_find(fd, solver, z0, throw=False)
-            final_residuals = fd(sols.value, None)
+        #     z0  = jnp.array(guess)
+        #     solver = optx.Newton(rtol=1e-7, atol=1e-7)
+        #     sols   = optx.root_find(fd, solver, z0, throw=False)
+        #     final_residuals = fd(sols.value, None)
         	
-            return sols.value, sols.stats, final_residuals
+        #     return sols.value, sols.stats, final_residuals
+        # if self.calculate_durca is True:
+        #     guessDurca=[0.06, 0.06, 0.25]
+        #     solution, stats, residuals = durca(guessDurca)
+        #     self.durca_density = solution
         if self.calculate_durca is True:
-            guessDurca=[0.06, 0.06, 0.25]
-            solution, stats, residuals = durca(guessDurca)
+            x_e = electron_fraction/(electron_fraction+muon_fraction)
+            x_DU = 1/(1+(1+jnp.cbrt(x_e))**3)
+            x_DU_curve = jnp.array([n, x_DU])
+            y_p_curve = jnp.array([n, yp_array])
+            nb_durca, yp_durca = utils.get_curve_intersection(x_DU_curve, y_p_curve)
+            ye = jnp.interp(nb_durca, n, ye_array)
+            ym = jnp.interp(nb_durca, n, ymu_array)
+            solution = ye, ym, nb_durca 
             self.durca_density = solution
-
     
         return proton_fraction, electron_fraction, muon_fraction
 

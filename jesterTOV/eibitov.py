@@ -341,7 +341,7 @@ def tov_solver(eos, pc):
             - "h": Enthalpy array
             - "e": Energy density array [geometric units]
             - "dloge_dlogp": Derivative d(log ε)/d(log p)
-            - "kappa": EiBI gravity parameter $\kappa$ [km²]
+            - "kappa": EiBI gravity parameter $\kappa$ [Geom]
             - "Lambda_cosmo": Cosmological constant parameter
         pc (float): Central pressure value [geometric units] at which to solve the TOV equations.
     

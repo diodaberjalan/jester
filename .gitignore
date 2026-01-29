@@ -162,3 +162,7 @@ cython_debug/
 #.idea/
 
 lalsuite/
+
+# ignore output files
+
+examples/inference/*/*/outdir/

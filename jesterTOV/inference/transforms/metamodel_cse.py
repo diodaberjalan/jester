@@ -188,6 +188,8 @@ class MetaModelCSETransform(JesterTransformBase):
         cse_params = ["nbreak"]
         for i in range(self.nb_CSE):
             cse_params.extend([f"n_CSE_{i}_u", f"cs2_CSE_{i}"])
+        # Add final cs2 parameter at nmax
+        cse_params.append(f"cs2_CSE_{self.nb_CSE}")
         return nep_params + cse_params
 
     def transform_func_MM_CSE(self, params: dict[str, Float]) -> dict[str, Float]:

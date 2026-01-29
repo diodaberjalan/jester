@@ -616,7 +616,8 @@ def tov_solver(eos, pc):
     #Jordan frame conversion
     beta_ST = eos["beta_ST"]
     A_phi_inf = jnp.exp(0.5 * beta_ST * jnp.power(phi_inf_target, 2))
-    R_jordan = A_phi_inf*R
+    A_phi_s = jnp.exp(0.5 * beta_ST * jnp.power(phi_s, 2))
+    R_jordan = A_phi_s*R
     nu_s_prime =  2 *M_s / (R * (R - 2.0 * M_s)) + R * jnp.power(psi_s, 2)
     M_inf_jordan = (1/A_phi_inf)*(M_inf + (beta_ST*phi_inf_target*psi_s/(jnp.sqrt(jnp.pi)*nu_s_prime)))
     k2_jordan = calc_k2_ST(R, M_inf, yR_tidal) + calc_kappa2_ST(R, M_inf, wR_tidal) 

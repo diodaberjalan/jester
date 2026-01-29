@@ -1,0 +1,81 @@
+# GW170817-only inference configuration with pre-sampled masses
+# SMC with Random Walk kernel for constraining EOS using GW data
+# This configuration demonstrates the new GWLikelihoodPresampled class
+# which eliminates the _random_key hack by pre-sampling masses at initialization
+
+seed: 43
+
+# Execution options
+dry_run: false
+validate_only: false
+
+# Transform configuration: MetaModel + CSE for high-density region
+transform:
+  type: "metamodel_cse_exactbetaeq"
+  ndat_metamodel: 100
+  nmax_nsat: 25.0
+  nb_CSE: 8
+  min_nsat_TOV: 0.75
+  ndat_TOV: 100
+  nb_masses: 100
+  crust_name: "DH"
+
+# Prior specification file
+prior:
+  specification_file: "prior.prior"
+
+# Likelihood constraints (only GW170817 enabled with pre-sampling)
+likelihoods:
+  - type: "constraints_eos"
+    enabled: true
+  - type: "gw"
+    enabled: true
+    parameters:
+      events:
+        - name: "GW170817"
+          # model_dir is optional - defaults to flow trained on XP-NRTv3 posterior samples
+          # To use a different flow, specify: model_dir: "/path/to/flow/model/"
+      penalty_value: -99999.0
+      N_masses_evaluation: 2000  # Number of points used for evaluating the likelihood
+      N_masses_batch_size: 1000  # Batch size for jax.lax.map for likelihood evaluation
+      seed: 42                   # Fixed seed for mass the pre-sampling described above
+  # Radio timing observations - constrain maximum TOV mass using observed pulsar masses
+  - type: "radio"
+    enabled: true
+    parameters:
+      pulsars:
+        - name: "J1614"
+          mass_mean: 1.94
+          mass_std: 0.06
+
+        - name: "J0740"
+          mass_mean: 2.08
+          mass_std: 0.14
+
+      # Number of mass points for numerical integration
+      nb_masses: 100
+  # ChiEFT likelihood - constrains low-density EOS using chiral effective field theory
+  - type: "chieft"
+    enabled: true
+    parameters:
+      low_filename: "../../../../jesterTOV/inference/data/chiEFT/2402.04172/low.dat"
+      high_filename: "../../../../jesterTOV/inference/data/chiEFT/2402.04172/high.dat"
+      nb_n: 100
+# BlackJAX Nested Sampling with Acceptance Walk configuration
+sampler:
+  type: "blackjax-ns-aw"
+  n_live: 1400
+  n_delete_frac: 0.5
+  n_target: 60
+  max_mcmc: 5000
+  max_proposals: 1000
+  termination_dlogz: 0.1
+  n_eos_samples: 10000
+  output_dir: "./outdir/"
+
+# Postprocessing configuration
+postprocessing:
+  enabled: true
+  make_cornerplot: false
+  make_massradius: true
+  make_pressuredensity: true
