@@ -2,22 +2,23 @@
 #Set job requirements
 #SBATCH -N 1
 #SBATCH -n 1
-#SBATCH -p gpu_h100
-#SBATCH -t 02:00:00
+#SBATCH --partition gpu
+#SBATCH -t 10:00:00
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-gpu=1
 #SBATCH --mem-per-gpu=40G
 #SBATCH --output="./outdir/log_smc_rw.out"
-#SBATCH --job-name="SMC-RW-GW170817"
+#SBATCH --job-name="SMC-RW-GW170817-chiEFT-Radio"
 
 now=$(date)
 echo "$now"
 
-# Loading modules
-# module load 2024
-# module load Python/3.10.4-GCCcore-11.3.0
-source /home/twouters2/projects/jester_review/jester/.venv/bin/activate
-
+module load  arch/r1/x86_64
+module load python/3.11.7
+module load miniforge3/4.8.3-4
+module load cuda/11.8.0
+module load texlive/20240312
+source activate jester-MG
 # Display GPU name
 nvidia-smi --query-gpu=name --format=csv,noheader
 
