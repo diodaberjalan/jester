@@ -294,17 +294,6 @@ def _tov_ode_iter_tidal(h, y, eos):
 
 
 
-# --------------------------------------------
-# This part, define matrix multiplication to solve for matching conditions (as well as it's derivative)
-# [ H0OnlyQT(M,q,R)   H0OnlyET(M,q,R)   H0OnlyQS(M,q,R)   H0OnlyES(M,q,R) ]   [ cQT ]   [ H0_int(M,q,R) ]
-# [ H0OnlyQT'(M,q,R)  H0OnlyET'(M,q,R)  H0OnlyQS'(M,q,R)  H0OnlyES'(M,q,R) ]  [ cET ] = [ H0'_int(M,q,R) ]
-# [ φpOnlyQT(M,q,R)   φpOnlyET(M,q,R)   φpOnlyQS(M,q,R)   φpOnlyES(M,q,R) ]  [ cQS ]   [ φp_int(M,q,R) ]
-# [ φpOnlyQT'(M,q,R)  φpOnlyET'(M,q,R)  φpOnlyQS'(M,q,R)  φpOnlyES'(M,q,R) ]  [ cES ]   [ φp'_int(M,q,R) ]
-# Left matrix from infinity expansion, right matrix from tov solver, and c matrix is what we solve for to determine lambdas.
-
-
-
-
 
 class ScalarTensorTOVSolver(TOVSolverBase):
     r"""
@@ -744,8 +733,20 @@ class ScalarTensorTOVSolver(TOVSolverBase):
             * lambda_ST2
             * jnp.power(M_inf, -5.0)
         )  # or lambda_ST1, must be same
-        # @TODO: add function to return other tidal deformabilities or quantities
-        return TOVSolution(M=M_inf_jordan, R=R_jordan, k2=3 / 2 * lambda_T / jnp.power(R_jordan, 5))  # type: ignore[arg-type]
+
+        # Return TOVSolution with scalar-tensor quantities in extra dict
+        extra = {
+            "lambda_S": Lambda_S_J,
+            "lambda_ST1": Lambda_ST1_J,
+            "lambda_ST2": Lambda_ST2_J,
+            "q": q,
+        }
+        return TOVSolution(
+            M=M_inf_jordan,
+            R=R_jordan,
+            k2=3 / 2 * lambda_T / jnp.power(R_jordan, 5),
+            extra=extra,
+        )  # type: ignore[arg-type]
 
     def get_required_parameters(self) -> list[str]:
         r"""
