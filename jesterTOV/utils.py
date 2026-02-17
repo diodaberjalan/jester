@@ -10,6 +10,7 @@ systems commonly used in neutron star physics.
 """
 
 from jax import vmap
+import jax
 import jax.numpy as jnp
 from functools import partial
 from jaxtyping import Array, Float, Int
@@ -428,3 +429,47 @@ def locate_lowest_non_causal_point(cs2: Float[Array, "n"]) -> Int[Array, ""]:
     masked_indices = jnp.where(mask, indices, len(cs2))
     first_index = jnp.min(masked_indices)
     return jnp.where(any_ones, first_index, -1)
+
+@jax.jit
+def get_curve_intersection(c1, c2):
+    """
+    Finds the first intersection point between two curves.
+    Input: c1 and c2 are (2, N) arrays where [0, :] is x and [1, :] is y.
+    Returns: jnp.array([x, y]) or [nan, nan] if no intersection exists.
+    """
+    x1, y1 = c1[0], c1[1]
+    x2, y2 = c2[0], c2[1]
+
+    # Map Curve 2 onto Curve 1's x-domain
+    # We use nan for extrapolation to avoid fake intersections at boundaries
+    y2_interp = jnp.interp(x1, x2, y2, left=jnp.nan, right=jnp.nan)
+    
+    # h(x) = f(x) - g(x)
+    diff = y1 - y2_interp
+    
+    # Check for sign changes: (pos -> neg) or (neg -> pos)
+    # diff[:-1] * diff[1:] <= 0 handles the crossing
+    is_crossing = (diff[:-1] * diff[1:]) <= 0
+    
+    # Find the first index where they cross
+    # jnp.argmax on a boolean array returns the first True index
+    idx = jnp.argmax(is_crossing)
+    
+    # Mask to check if an intersection actually exists (argmax returns 0 if all False)
+    exists = is_crossing[idx]
+    
+    # Linear interpolation for sub-grid accuracy:
+    # x_int = x_i - h(x_i) * (x_{i+1} - x_i) / (h(x_{i+1}) - h(x_i))
+    x_i, x_next = x1[idx], x1[idx+1]
+    h_i, h_next = diff[idx], diff[idx+1]
+    
+    delta_x = x_next - x_i
+    delta_h = h_next - h_i
+    
+    # Add small epsilon to denominator to prevent div by zero in parallel lines
+    x_int = x_i - h_i * (delta_x / (delta_h + 1e-12))
+    
+    # Calculate corresponding y by interpolating on the first curve
+    y_int = y1[idx] + (y1[idx+1] - y1[idx]) * (x_int - x_i) / delta_x
+    
+    return jnp.where(exists, jnp.array([x_int, y_int]), jnp.array([jnp.nan, jnp.nan]))
