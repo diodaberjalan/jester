@@ -69,4 +69,6 @@ class FamilyData(NamedTuple):
     masses: Float[Array, "ndat"]  # Masses [M_sun]
     radii: Float[Array, "ndat"]  # Radii [km]
     lambdas: Float[Array, "ndat"]  # Dimensionless tidal deformability (tensor)
-    extra: Optional[dict[str, Float[Array, "ndat"]]] = None  # Solver-specific quantities
+    extra: Optional[dict[str, Float[Array, "ndat"]]] = (
+        None  # Solver-specific quantities
+    )

@@ -19,18 +19,20 @@ class TransformConfig(BaseModel):
 
     Attributes
     ----------
-    type : Literal["metamodel", "metamodel_cse", "spectral"]
+    type : Literal["metamodel", "metamodel_cse", "spectral", "skryme", "skryme_cse", "skryme_peakcse"]
         Type of transform to use
     ndat_metamodel : int
         Number of data points for MetaModel EOS
     nmax_nsat : float
         Maximum density in units of saturation density
     nb_CSE : int
-        Number of CSE parameters (only for metamodel_cse)
+        Number of CSE parameters (only for metamodel_cse, skryme_cse, and skryme_peakcse)
     n_points_high : int
         Number of high-density points for spectral EOS (only for spectral)
     nmin_MM_nsat : float
         Starting density for metamodel grid as fraction of nsat (default: 0.75)
+    nmin_Skryme_nsat : float
+        Starting density for Skryme grid as fraction of nsat (default: 0.75)
     min_nsat_TOV : float
         Minimum central density for TOV integration (units of nsat)
     ndat_TOV : int
@@ -45,12 +47,20 @@ class TransformConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["metamodel", "metamodel_cse", "spectral"]
+    type: Literal[
+        "metamodel",
+        "metamodel_cse",
+        "spectral",
+        "skryme",
+        "skryme_cse",
+        "skryme_peakcse",
+    ]
     ndat_metamodel: int = 100
     nmax_nsat: float = 25.0
-    nb_CSE: int = 8  # Only for metamodel_cse
+    nb_CSE: int = 8  # Only for metamodel_cse and skryme_cse
     n_points_high: int = 500  # Only for spectral
     nmin_MM_nsat: float = 0.75  # Starting density for metamodel grid
+    nmin_Skryme_nsat: float = 0.75  # Starting density for Skryme grid
     min_nsat_TOV: float = 0.75  # Minimum density for TOV integration
     ndat_TOV: int = 100
     nb_masses: int = 100
@@ -62,15 +72,15 @@ class TransformConfig(BaseModel):
     @field_validator("nb_CSE")
     @classmethod
     def validate_nb_cse(cls, v: int, info: ValidationInfo) -> int:
-        """Validate that nb_CSE is only used with metamodel_cse."""
+        """Validate that nb_CSE is only used with CSE variants."""
         if (
             "type" in info.data
-            and info.data["type"] in ["metamodel", "spectral"]
+            and info.data["type"] in ["metamodel", "spectral", "skryme"]
             and v != 0
         ):
             raise ValueError(
-                "nb_CSE must be 0 for type='metamodel' or type='spectral'. "
-                "Use type='metamodel_cse' for CSE extension."
+                "nb_CSE must be 0 for type='metamodel', type='spectral', or type='skryme'. "
+                "Use type='metamodel_cse', type='skryme_cse', or type='skryme_peakcse' for CSE extension."
             )
         return v
 

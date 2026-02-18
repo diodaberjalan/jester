@@ -10,6 +10,11 @@ from jesterTOV.eos.metamodel import (
     MetaModel_EOS_model,
     MetaModel_with_CSE_EOS_model,
 )
+from jesterTOV.eos.skryme import (
+    Skryme_EOS_model,
+    Skryme_with_CSE_EOS_model,
+    Skryme_with_peakCSE_EOS_model,
+)
 from jesterTOV.eos.spectral import SpectralDecomposition_EOS_model
 from jesterTOV.tov.base import TOVSolverBase
 from jesterTOV.tov.gr import GRTOVSolver
@@ -221,6 +226,37 @@ class JesterTransform(NtoMTransform):
             return SpectralDecomposition_EOS_model(
                 crust_name=getattr(config, "crust_name", "DH"),
                 n_points_high=getattr(config, "n_points_high", 500),
+            )
+
+        elif eos_type == "skryme":
+            return Skryme_EOS_model(
+                nsat=0.16,
+                nmin_Skryme_nsat=getattr(config, "nmin_Skryme_nsat", 0.75),
+                nmax_nsat=getattr(config, "nmax_nsat", 25.0),
+                ndat=getattr(config, "ndat_skryme", 100),
+                crust_name=getattr(config, "crust_name", "DH"),
+            )
+
+        elif eos_type == "skryme_cse":
+            return Skryme_with_CSE_EOS_model(
+                nsat=0.16,
+                nmin_Skryme_nsat=getattr(config, "nmin_Skryme_nsat", 0.75),
+                nmax_nsat=getattr(config, "nmax_nsat", 25.0),
+                max_nbreak_nsat=max_nbreak_nsat,
+                ndat_skryme=getattr(config, "ndat_skryme", 100),
+                ndat_CSE=100,
+                nb_CSE=getattr(config, "nb_CSE", 8),
+                crust_name=getattr(config, "crust_name", "DH"),
+            )
+
+        elif eos_type == "skryme_peakcse":
+            return Skryme_with_peakCSE_EOS_model(
+                nsat=0.16,
+                nmin_Skryme_nsat=getattr(config, "nmin_Skryme_nsat", 0.75),
+                nmax_nsat=getattr(config, "nmax_nsat", 25.0),
+                ndat_skryme=getattr(config, "ndat_skryme", 100),
+                ndat_CSE=100,
+                crust_name=getattr(config, "crust_name", "DH"),
             )
 
         else:

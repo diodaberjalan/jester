@@ -101,8 +101,7 @@ class TOVSolverBase(ABC):
 
         # Convert to physical units and compute tidal deformability
         return self._create_family_data(
-            pcs, masses, radii, k2s, ndat,
-            extra=extra_fields
+            pcs, masses, radii, k2s, ndat, extra=extra_fields
         )
 
     def _get_pc_min(self, eos_data: EOSData, min_nsat: float) -> Float[Array, ""]:

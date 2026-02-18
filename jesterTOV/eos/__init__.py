@@ -5,12 +5,15 @@ Submodules
 - base: Base classes for EOS models
 - crust: Crust equation of state models
 - metamodel: Meta-model parametrizations (MetaModel, MetaModel+CSE, MetaModel+peakCSE)
+- skryme: Skyrme parametrizations (Skyrme, Skyrme+CSE, Skyrme+peakCSE)
 - spectral: Spectral decomposition parametrization
+- draft_metamodel2: Draft meta-model implementations
 
 Import classes from their specific submodules:
 
     from jesterTOV.eos.base import Interpolate_EOS_model
     from jesterTOV.eos.crust import Crust, CRUST_DIR
     from jesterTOV.eos.metamodel import MetaModel_EOS_model, MetaModel_with_CSE_EOS_model
+    from jesterTOV.eos.skryme import Skryme_EOS_model, Skryme_with_CSE_EOS_model
     from jesterTOV.eos.spectral import SpectralDecomposition_EOS_model
 """
