@@ -1,4 +1,3 @@
-
 import jax
 import jax.numpy as jnp
 
@@ -10,6 +9,7 @@ import jax.numpy as jnp
 # [ φpOnlyQT(M,q,R)   φpOnlyET(M,q,R)   φpOnlyQS(M,q,R)   φpOnlyES(M,q,R) ]  [ cQS ]   [ φp_int(M,q,R) ]
 # [ φpOnlyQT'(M,q,R)  φpOnlyET'(M,q,R)  φpOnlyQS'(M,q,R)  φpOnlyES'(M,q,R) ]  [ cES ]   [ φp'_int(M,q,R) ]
 # Left matrix from infinity expansion, right matrix from tov solver, and c matrix is what we solve for to determine lambdas.
+
 
 def build_exterior_basis(M, q, R):
     r"""
@@ -97,8 +97,6 @@ def build_exterior_basis_autodiff(M, q, R):
         PhiPOnlyQS_autodiff_jax(M, q, R),
         PhiPOnlyES_autodiff_jax(M, q, R),
     ]
-
-
 
 
 def coeff_solver(interior_sol, exterior_basis, exterior_basis_prime):
@@ -208,10 +206,10 @@ def compute_tidal_deformabilities(coefficients):
     return lambda_T, lambda_S, lambda_ST1, lambda_ST2
 
 
-
 # Infinity expansion for boundary conditions:
 # From Creci et al Jupyter notebook https://community.wolfram.com/groups/-/m/t/3459453
 # Used as exterior basis to match conditions
+
 
 def H0OnlyQT_jax(M, q, r):
     r"""
