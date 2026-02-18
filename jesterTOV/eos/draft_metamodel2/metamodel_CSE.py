@@ -152,9 +152,7 @@ class MetaModel_with_CSE_EOS_model(Interpolate_EOS_model):
         if return_extra or calculate_durca:
             # Determine proton_fraction setting from self.metamodel
             # with_muon=True means 'exact', with_muon=False means 'approx'
-            proton_fraction_setting = (
-                "exact" if self.metamodel.with_muon else "approx"
-            )
+            proton_fraction_setting = "exact" if self.metamodel.with_muon else "approx"
             # Use helper to create fresh metamodel instance limited to nbreak
             metamodel = create_metamodel_for_extension(
                 nsat=self.metamodel.nsat,

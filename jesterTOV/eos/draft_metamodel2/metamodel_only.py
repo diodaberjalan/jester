@@ -4,7 +4,6 @@ This class is kept for backward compatibility. Use MetaModel_EOS_model with
 return_extra=True to get the same functionality.
 """
 
-import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
 from jesterTOV import utils
@@ -30,8 +29,7 @@ class MetaModel_only(Interpolate_EOS_model):
         calculate_durca: bool = False,
         **metamodel_kwargs,
     ):
-        r"""
-        """
+        r""" """
 
         self.nmax = nmax_nsat * nsat
         self.ndat_CSE = ndat_CSE
@@ -74,9 +72,16 @@ class MetaModel_only(Interpolate_EOS_model):
         mm_output = metamodel.construct_eos(
             NEP_dict, return_extra=True, calculate_durca=self.calculate_durca
         )
-        n_metamodel, p_metamodel, _, e_metamodel, _, mu_metamodel, cs2_metamodel, extra = (
-            mm_output
-        )
+        (
+            n_metamodel,
+            p_metamodel,
+            _,
+            e_metamodel,
+            _,
+            mu_metamodel,
+            cs2_metamodel,
+            extra,
+        ) = mm_output
 
         # Convert units back for CSE initialization
         n_metamodel = n_metamodel / utils.fm_inv3_to_geometric

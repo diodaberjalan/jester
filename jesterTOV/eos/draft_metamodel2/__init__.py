@@ -7,7 +7,9 @@ This module contains updated metamodel implementations with:
 
 from jesterTOV.eos.draft_metamodel2.base import MetaModel_EOS_model
 from jesterTOV.eos.draft_metamodel2.metamodel_CSE import MetaModel_with_CSE_EOS_model
-from jesterTOV.eos.draft_metamodel2.metamodel_peakCSE import MetaModel_with_peakCSE_EOS_model
+from jesterTOV.eos.draft_metamodel2.metamodel_peakCSE import (
+    MetaModel_with_peakCSE_EOS_model,
+)
 from jesterTOV.eos.draft_metamodel2.metamodel_only import MetaModel_only
 
 __all__ = [

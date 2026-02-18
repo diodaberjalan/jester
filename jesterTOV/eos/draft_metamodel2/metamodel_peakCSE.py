@@ -158,9 +158,16 @@ class MetaModel_with_peakCSE_EOS_model(Interpolate_EOS_model):
 
         # Handle both return_extra=True and return_extra=False cases
         if return_extra:
-            n_metamodel, p_metamodel, _, e_metamodel, _, mu_metamodel, cs2_metamodel, extra = (
-                mm_output
-            )
+            (
+                n_metamodel,
+                p_metamodel,
+                _,
+                e_metamodel,
+                _,
+                mu_metamodel,
+                cs2_metamodel,
+                extra,
+            ) = mm_output
         else:
             (
                 n_metamodel,
