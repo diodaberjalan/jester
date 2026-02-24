@@ -17,12 +17,11 @@ likelihoods:
   enabled: true
 - type: constraints_gamma
   enabled: true
-  penalty_gamma: -1e5
+  penalty_gamma: -1.0e10
 - type: gw
   enabled: true
   events:
   - name: GW170817
-  penalty_value: -99999.0
   N_masses_evaluation: 2000
   N_masses_batch_size: 1000
   seed: 42

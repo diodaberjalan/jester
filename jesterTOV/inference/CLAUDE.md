@@ -41,6 +41,19 @@ L_sym = UniformPrior(10.0, 200.0, parameter_names=["L_sym"])
   - For model comparison and evidence estimation
   - Needs additional testing/fixes
 
+### Changing Default Values for Likelihood Parameters
+
+When a user asks to change a default value (e.g. `penalty_value`), update **all** of the following:
+
+1. **`likelihoods/<name>.py`** — `__init__` signature default(s) and docstring(s)
+2. **`config/schemas/likelihoods.py`** — `Field(default=...)` and any docstring YAML example
+3. **`config/generate_yaml_reference.py`** — hardcoded `"example"` and `"default"` strings for the affected likelihood type(s); the generator does **not** read Pydantic defaults automatically
+4. **`docs/inference/yaml_reference.md`** — regenerate: `uv run python -m jesterTOV.inference.config.generate_yaml_reference`
+5. **`examples/inference/**/config.yaml`** — remove or update the now-redundant explicit value
+6. **`tests/test_inference/test_config.py`** — update any assertion on the old default
+
+The factory (`likelihoods/factory.py`) passes `config.<field>` through, so no change needed there.
+
 ### Inference Documentation
 - `docs/inference_index.md` - Navigation hub
 - `docs/inference_quickstart.md` - Quick start guide
@@ -66,12 +79,18 @@ jesterTOV/inference/
 │   └── schemas/         # Domain-specific config sub-modules
 │       ├── eos.py       #   BaseEOSConfig + concrete EOS configs
 │       ├── tov.py       #   BaseTOVConfig + GRTOVConfig
-│       ├── likelihoods.py #  All likelihood configs
+│       ├── likelihoods.py #  All likelihood configs (incl. GWEventConfig)
 │       └── samplers.py  #   All sampler configs
 │   ├── parser.py        # YAML loading
 │   └── generate_yaml_reference.py  # Auto-generate docs
 ├── priors/              # Prior specification system
 │   └── parser.py        # Parse .prior files (bilby-style Python format)
+├── flows/               # Normalizing flow utilities for GW likelihoods
+│   ├── bilby_extract.py # Extract GW posteriors from bilby HDF5 results (+ CLI)
+│   ├── config.py        # FlowTrainingConfig Pydantic model
+│   ├── train_flow.py    # Flow training entry point
+│   ├── flow.py          # Flow model definition
+│   └── __init__.py      # Exports Flow, load_model, extract_gw_posterior_from_bilby
 ├── transforms/          # Unified transform system
 │   ├── transform.py     # JesterTransform - single class for all EOS+TOV combinations
 │   └── __init__.py      # Exports JesterTransform
@@ -122,6 +141,12 @@ JesterTransform.from_config(config.eos, config.tov)
 Validate parameters
   ├─ Check all required EOS params in prior → raise error if missing
   └─ Check all required TOV params in prior → warn if unused
+    ↓
+prepare_gw_flows(config, outdir)   # no-op unless from_bilby_result events exist
+  ├─ Extract NPZ from bilby HDF5 (jester_extract_gw_posterior_bilby)
+  ├─ Train normalizing flow (FlowTrainingConfig + train_flow_from_config)
+  ├─ Hash-based cache: skip training if flow unchanged (flow_config_hash.json)
+  └─ Return updated config with resolved nf_model_dir for each event
     ↓
 Load data (NICER, GW posteriors, ChiEFT, etc.)
   ├─ Cache downloads from Zenodo
@@ -320,7 +345,11 @@ Configuration files use YAML with Pydantic validation. See `examples/inference/*
 
 **Likelihood Types** (defined in `config/schemas/likelihoods.py`, re-exported from `config/schema.py`):
 1. `GWLikelihoodConfig` - Gravitational wave events (pre-sampled)
-   - events: list of event names (e.g., ["GW170817"])
+   - `events`: list of `GWEventConfig` objects — two modes per event:
+     - **Pre-trained flow** (default): set `nf_model_dir` to a trained flow directory, or omit to use a built-in preset
+     - **From bilby result**: set `from_bilby_result` to a bilby HDF5 path; jester extracts posterior samples and trains a flow automatically via `prepare_gw_flows()` in `run_inference.py`
+   - `GWEventConfig` fields: `name` (required), `nf_model_dir`, `from_bilby_result`, `flow_config`, `retrain_flow`
+   - `from_bilby_result` and `nf_model_dir` are mutually exclusive; `flow_config`/`retrain_flow` only valid with `from_bilby_result`
 2. `GWResampledLikelihoodConfig` - GW with resampling during MCMC
 3. `NICERLikelihoodConfig` - X-ray timing
    - sources: list of sources (e.g., ["J0030", "J0740"])

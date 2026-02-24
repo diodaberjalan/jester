@@ -179,8 +179,7 @@ Constrain the EOS using gravitational wave observations of binary neutron star m
 - type: "gw"
   enabled: true
   parameters:
-    events: [{"name": "GW170817", "model_dir": "./NFs/GW170817"}]  # List of GW events
-    penalty_value: -99999.0  # Penalty for M > M_TOV (optional, default: -99999.0)
+    events: [{"name": "GW170817", "nf_model_dir": "./NFs/GW170817"}]  # List of GW events (see GWEventConfig below)
     N_masses_evaluation: 2000  # Number of mass samples to pre-sample (optional, default: 2000)
     N_masses_batch_size: 1000  # Batch size for processing (optional, default: 1000)
     seed: 42  # Random seed for mass sampling (optional, default: 42)
@@ -188,8 +187,10 @@ Constrain the EOS using gravitational wave observations of binary neutron star m
 
 **Field Details:**
 
-- **`events`** (`list[dict]`) - List of GW events with `name` and optional `model_dir` keys. If `model_dir` is omitted, uses preset paths.
-- **`penalty_value`** (`float`, default: `-99999.0`) - Log-likelihood penalty for masses exceeding TOV maximum mass
+- **`events`** (`list[GWEventConfig]`) - List of GW event configs (see **GWEventConfig** below). Each entry must have `name`. Two modes are supported:
+  - **Pre-trained flow**: set `nf_model_dir` to point to a trained flow, or omit it to use a built-in preset.
+  - **From bilby result**: set `from_bilby_result` to the path of a bilby HDF5 result file; jester will extract posterior samples and train a flow automatically before inference.
+- **`penalty_value`** (`float`, default: `0.0`) - Log-likelihood penalty for masses exceeding TOV maximum mass (default: 0.0, i.e. no penalty)
 - **`N_masses_evaluation`** (`int`, default: `2000`) - Number of mass samples to pre-sample from the GW posterior
 - **`N_masses_batch_size`** (`int`, default: `1000`) - Batch size for jax.lax.map processing of mass grid
 - **`seed`** (`int`, default: `42`) - Random seed for mass pre-sampling from GW posterior
@@ -198,7 +199,35 @@ Constrain the EOS using gravitational wave observations of binary neutron star m
 
 **Description:**
 
-**Default GW likelihood** (presampled version): Pre-samples masses from GW posterior for efficient evaluation. Recommended for production use.
+**Default GW likelihood** (presampled version): pre-samples masses from the GW posterior for efficient evaluation. Recommended for production use.
+
+**GWEventConfig fields** (each entry in `events`):
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | str | required | Event name, e.g. `GW170817` |
+| `nf_model_dir` | str\|null | null | Path to a pre-trained normalizing flow directory. Mutually exclusive with `from_bilby_result`. |
+| `from_bilby_result` | str\|null | null | Path to a bilby result `.hdf5` file. jester will extract posterior samples and train a flow automatically. |
+| `flow_config` | str\|null | null | Path to a `FlowTrainingConfig` YAML file for custom flow training (only valid with `from_bilby_result`). |
+| `retrain_flow` | bool | false | Force re-training even if a cached flow exists (only valid with `from_bilby_result`). |
+
+**Examples**:
+
+```yaml
+# Pre-trained flow (preset):
+events:
+  - name: GW170817
+
+# Pre-trained flow (custom path):
+events:
+  - name: GW170817
+    nf_model_dir: ./my_flow
+
+# From bilby result (auto-train):
+events:
+  - name: GW170817
+    from_bilby_result: ./GW170817_result.hdf5
+```
 
 ::::
 
@@ -210,16 +239,15 @@ Constrain the EOS using gravitational wave observations of binary neutron star m
 - type: "gw_resampled"
   enabled: true
   parameters:
-    events: [{"name": "GW170817", "model_dir": "./NFs/GW170817"}]  # List of GW events
-    penalty_value: -99999.0  # Penalty for M > M_TOV (optional, default: -99999.0)
+    events: [{"name": "GW170817", "nf_model_dir": "./NFs/GW170817"}]  # List of GW events
     N_masses_evaluation: 20  # Number of masses per evaluation (optional, default: 20)
     N_masses_batch_size: 10  # Batch size for sampling (optional, default: 10)
 ```
 
 **Field Details:**
 
-- **`events`** (`list[dict]`) - List of GW events with `name` and optional `model_dir` keys
-- **`penalty_value`** (`float`, default: `-99999.0`) - Log-likelihood penalty for masses exceeding TOV maximum mass
+- **`events`** (`list[dict]`) - List of GW events with `name` and optional `nf_model_dir` keys
+- **`penalty_value`** (`float`, default: `0.0`) - Log-likelihood penalty for masses exceeding TOV maximum mass (default: 0.0, i.e. no penalty)
 - **`N_masses_evaluation`** (`int`, default: `20`) - Number of mass samples to draw on-the-fly per likelihood evaluation
 - **`N_masses_batch_size`** (`int`, default: `10`) - Batch size for mass sampling and processing
 
