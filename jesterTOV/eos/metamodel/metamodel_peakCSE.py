@@ -1,11 +1,13 @@
 r"""Meta-model EOS with Gaussian peak Constant Speed-of-sound Extensions (peakCSE)."""
 
 import jax.numpy as jnp
-from jaxtyping import Array, Float, Int
+from jaxtyping import Float, Int
 
 from jesterTOV import utils
 from jesterTOV.eos.base import Interpolate_EOS_model
-from jesterTOV.eos.metamodel.base import MetaModel_EOS_model
+from jesterTOV.eos.metamodel.base import (
+    create_metamodel_for_extension,
+)
 
 
 class MetaModel_with_peakCSE_EOS_model(Interpolate_EOS_model):
@@ -80,7 +82,16 @@ class MetaModel_with_peakCSE_EOS_model(Interpolate_EOS_model):
         self.ndat_metamodel = ndat_metamodel
         self.metamodel_kwargs = metamodel_kwargs
 
-    def construct_eos(self, params: dict):
+        # Store proton_fraction setting from metamodel_kwargs for later use
+        self.proton_fraction_setting = metamodel_kwargs.get("proton_fraction", "exact")
+
+    def construct_eos(
+        self,
+        NEP_dict: dict,
+        peakCSE_dict: dict,
+        return_extra: bool = False,
+        calculate_durca: bool | None = None,
+    ):
         r"""
         Construct the complete EOS using meta-model + peakCSE extensions.
 
@@ -89,62 +100,109 @@ class MetaModel_with_peakCSE_EOS_model(Interpolate_EOS_model):
         and approach the pQCD conformal limit at high densities.
 
         Args:
-            params (dict): Combined parameters including:
+            NEP_dict (dict): Nuclear empirical parameters for meta-model construction.
+                Must include 'nbreak' key specifying the transition density between
+                meta-model and peakCSE regions. See MetaModel_EOS_model.construct_eos
+                for complete NEP parameter descriptions.
+            peakCSE_dict (dict): peakCSE model parameters defining the high-density behavior:
 
-                - Nuclear empirical parameters (NEP) for meta-model construction
-                - 'nbreak' key specifying the transition density between
-                  meta-model and peakCSE regions
-                - peakCSE model parameters defining high-density behavior
-                  (gaussian_peak, gaussian_mu, gaussian_sigma, logit_growth_rate, logit_midpoint)
+                - **gaussian_peak** (float): Amplitude :math:`A` of the Gaussian peak
+                - **gaussian_mu** (float): Peak location :math:`\mu` [:math:`\mathrm{fm}^{-3}`]
+                - **gaussian_sigma** (float): Peak width :math:`\sigma` [:math:`\mathrm{fm}^{-3}`]
+                - **logit_growth_rate** (float): Growth rate :math:`k` for pQCD approach
+                - **logit_midpoint** (float): Midpoint density :math:`n_{\mathrm{mid}}` for logistic transition
+            return_extra (bool, optional): If True, return extra metamodel-specific quantities
+                (proton fraction, lepton fractions, DURCA density) in the output.
+                Defaults to False.
+            calculate_durca (bool | None, optional): If True, calculate the Direct Urca threshold density.
+                If None, uses the default from the metamodel instance. Defaults to None.
 
         Returns:
-            EOSData: Complete EOS data containing ns, ps, hs, es, dloge_dlogps, cs2, mu
+            tuple: Complete EOS data containing:
+
+                - **ns**: Number densities [geometric units]
+                - **ps**: Pressures [geometric units]
+                - **hs**: Specific enthalpies [geometric units]
+                - **es**: Energy densities [geometric units]
+                - **dloge_dlogps**: Logarithmic derivative :math:`\frac{d\ln\varepsilon}{d\ln p}`
+                - **mu**: Chemical potential [geometric units]
+                - **cs2**: Speed of sound squared including peakCSE structure
+                - **extra** (if return_extra=True): Dict with metamodel-specific quantities
 
         Note:
             The peakCSE speed of sound follows:
-
-            .. math::
-                c^2_s = c^2_{s,{\rm break}} + \frac{\frac{1}{3} - c^2_{s,{\rm break}}}{1 + e^{-l_{\rm sig}(n - n_{\rm sig})}} + c^2_{s,{\rm peak}}e^{-\frac{1}{2}\left(\frac{n - n_{\rm peak}}{\sigma_{\rm peak}}\right)^2}
+            :math:`c^2_s &= c^2_{s,{\rm break}} + \frac{\frac{1}{3} - c^2_{s,{\rm break}}}{1 + e^{-l_{\rm sig}(n - n_{\rm sig})}} + c^2_{s,{\rm peak}}e^{-\frac{1}{2}\left(\frac{n - n_{\rm peak}}{\sigma_{\rm peak}}\right)^2}`
 
             This ensures smooth transitions, realistic phase transition modeling,
             and asymptotic consistency with the pQCD conformal limit :math:`c_s^2 = 1/3`.
         """
 
-        # Initializate the MetaModel part up to n_break
-        metamodel = MetaModel_EOS_model(
+        # Get nbreak for use in metamodel creation
+        nbreak = NEP_dict["nbreak"]
+
+        # Use helper to create fresh metamodel instance limited to nbreak
+        # This ensures proton_fraction setting is properly propagated
+        metamodel = create_metamodel_for_extension(
             nsat=self.nsat,
             nmin_MM_nsat=self.nmin_MM_nsat,
-            nmax_nsat=params["nbreak"] / self.nsat,
+            nbreak=nbreak,
             ndat=self.ndat_metamodel,
-            **self.metamodel_kwargs,
+            metamodel_kwargs=self.metamodel_kwargs,
+            proton_fraction_setting=self.proton_fraction_setting,
         )
 
         # Construct the metamodel part:
-        mm_output = metamodel.construct_eos(params)
-        # MetaModel guarantees mu is populated
-        mu_metamodel: Float[Array, "n_points"] = mm_output.mu  # type: ignore[assignment]
+        mm_output = metamodel.construct_eos(
+            NEP_dict, return_extra=True, calculate_durca=calculate_durca
+        )
+
+        # Handle both return_extra=True and return_extra=False cases
+        if return_extra:
+            (
+                n_metamodel,
+                p_metamodel,
+                _,
+                e_metamodel,
+                _,
+                mu_metamodel,
+                cs2_metamodel,
+                extra,
+            ) = mm_output
+        else:
+            (
+                n_metamodel,
+                p_metamodel,
+                _,
+                e_metamodel,
+                _,
+                mu_metamodel,
+                cs2_metamodel,
+            ) = mm_output
+            extra = None
 
         # Convert units back for CSE initialization
-        n_metamodel = mm_output.ns / utils.fm_inv3_to_geometric
-        p_metamodel = mm_output.ps / utils.MeV_fm_inv3_to_geometric
-        e_metamodel = mm_output.es / utils.MeV_fm_inv3_to_geometric
-        cs2_metamodel = mm_output.cs2
+        n_metamodel = n_metamodel / utils.fm_inv3_to_geometric
+        p_metamodel = p_metamodel / utils.MeV_fm_inv3_to_geometric
+        e_metamodel = e_metamodel / utils.MeV_fm_inv3_to_geometric
 
         # Get values at break density
-        p_break = jnp.interp(params["nbreak"], n_metamodel, p_metamodel)
-        e_break = jnp.interp(params["nbreak"], n_metamodel, e_metamodel)
-        mu_break = jnp.interp(params["nbreak"], n_metamodel, mu_metamodel)
-        cs2_break = jnp.interp(params["nbreak"], n_metamodel, cs2_metamodel)
+        p_break = jnp.interp(NEP_dict["nbreak"], n_metamodel, p_metamodel)
+        e_break = jnp.interp(NEP_dict["nbreak"], n_metamodel, e_metamodel)
+        mu_break = jnp.interp(NEP_dict["nbreak"], n_metamodel, mu_metamodel)
+        cs2_break = jnp.interp(NEP_dict["nbreak"], n_metamodel, cs2_metamodel)
 
         # Define the speed-of-sound of the extension portion
         # the model is taken from arXiv:1812.08188
         # but instead of energy density, I am using density as the input
-        offset = self.offset_calc(params["nbreak"], cs2_break, params)
+        offset = self.offset_calc(NEP_dict["nbreak"], cs2_break, peakCSE_dict)
         cs2_extension_function = lambda x: (
-            params["gaussian_peak"]
+            peakCSE_dict["gaussian_peak"]
             * jnp.exp(
                 -0.5
-                * ((x - params["gaussian_mu"]) ** 2 / params["gaussian_sigma"] ** 2)
+                * (
+                    (x - peakCSE_dict["gaussian_mu"]) ** 2
+                    / peakCSE_dict["gaussian_sigma"] ** 2
+                )
             )
             + offset
             + (
@@ -152,14 +210,15 @@ class MetaModel_with_peakCSE_EOS_model(Interpolate_EOS_model):
                 / (
                     1.0
                     + jnp.exp(
-                        -params["logit_growth_rate"] * (x - params["logit_midpoint"])
+                        -peakCSE_dict["logit_growth_rate"]
+                        * (x - peakCSE_dict["logit_midpoint"])
                     )
                 )
             )
         )
         # Compute n, p, e for peakCSE (number densities in unit of fm^-3)
         n_CSE = jnp.logspace(
-            jnp.log10(params["nbreak"]), jnp.log10(self.nmax), num=self.ndat_CSE
+            jnp.log10(NEP_dict["nbreak"]), jnp.log10(self.nmax), num=self.ndat_CSE
         )
         cs2_CSE = cs2_extension_function(n_CSE)
 
@@ -179,24 +238,49 @@ class MetaModel_with_peakCSE_EOS_model(Interpolate_EOS_model):
 
         ns, ps, hs, es, dloge_dlogps = self.interpolate_eos(n, p, e)
 
-        from jesterTOV.tov.data_classes import EOSData
+        # Note: Particle fractions are already limited to nbreak because we create
+        # a fresh metamodel instance limited to nbreak. No cropping needed.
+        if return_extra:
+            return ns, ps, hs, es, dloge_dlogps, mu, cs2, extra
+        return ns, ps, hs, es, dloge_dlogps, mu, cs2
 
-        return EOSData(
-            ns=ns,
-            ps=ps,
-            hs=hs,
-            es=es,
-            dloge_dlogps=dloge_dlogps,
-            cs2=cs2,
-            mu=mu,
-        )
-
-    def offset_calc(self, nbreak, cs2_break, params):
-        gaussian_part = params["gaussian_peak"] * jnp.exp(
-            -0.5 * (nbreak - params["gaussian_mu"]) ** 2 / params["gaussian_sigma"] ** 2
+    def offset_calc(self, nbreak, cs2_break, peakCSE_dict):
+        gaussian_part = peakCSE_dict["gaussian_peak"] * jnp.exp(
+            -0.5
+            * (nbreak - peakCSE_dict["gaussian_mu"]) ** 2
+            / peakCSE_dict["gaussian_sigma"] ** 2
         )
         exp_part = jnp.exp(
-            -params["logit_growth_rate"] * (nbreak - params["logit_midpoint"])
+            -peakCSE_dict["logit_growth_rate"]
+            * (nbreak - peakCSE_dict["logit_midpoint"])
         )
         offset = ((1.0 + exp_part) * (cs2_break - gaussian_part) - 1.0 / 3.0) / exp_part
         return offset
+
+    def get_required_parameters(self) -> list[str]:
+        r"""
+        Return list of parameters required by MetaModel with peakCSE.
+
+        Returns:
+            list[str]: NEP parameters + nbreak + peakCSE parameters
+                ["E_sat", "K_sat", "Q_sat", "Z_sat", "E_sym", "L_sym", "K_sym", "Q_sym", "Z_sym",
+                 "nbreak", "gaussian_peak", "gaussian_mu", "gaussian_sigma",
+                 "logit_growth_rate", "logit_midpoint"]
+        """
+        return [
+            "E_sat",
+            "K_sat",
+            "Q_sat",
+            "Z_sat",
+            "E_sym",
+            "L_sym",
+            "K_sym",
+            "Q_sym",
+            "Z_sym",
+            "nbreak",
+            "gaussian_peak",
+            "gaussian_mu",
+            "gaussian_sigma",
+            "logit_growth_rate",
+            "logit_midpoint",
+        ]

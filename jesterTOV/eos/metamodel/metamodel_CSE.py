@@ -1,12 +1,14 @@
 r"""Meta-model EOS with piecewise constant speed-of-sound extensions (CSE)."""
 
 import jax.numpy as jnp
-from jaxtyping import Float, Int
+from jaxtyping import Array, Float, Int
 
 from jesterTOV import utils
 from jesterTOV.eos.base import Interpolate_EOS_model
-from jesterTOV.eos.metamodel.base import MetaModel_EOS_model
-from jesterTOV.tov.data_classes import EOSData
+from jesterTOV.eos.metamodel.base import (
+    MetaModel_EOS_model,
+    create_metamodel_for_extension,
+)
 
 
 class MetaModel_with_CSE_EOS_model(Interpolate_EOS_model):
@@ -22,9 +24,6 @@ class MetaModel_with_CSE_EOS_model(Interpolate_EOS_model):
 
     1. **Low-to-intermediate density**: Meta-model approach (crust + core)
     2. **High density**: Speed-of-sound extension scheme
-
-    The CSE grid is specified via individual parameters (n_CSE_i_u, cs2_CSE_i)
-    that are converted internally to density and sound speed arrays.
     """
 
     def __init__(
@@ -35,7 +34,6 @@ class MetaModel_with_CSE_EOS_model(Interpolate_EOS_model):
         max_nbreak_nsat: Float | None = None,
         ndat_metamodel: Int = 100,
         ndat_CSE: Int = 100,
-        nb_CSE: Int = 8,
         **metamodel_kwargs,
     ):
         r"""
@@ -68,10 +66,6 @@ class MetaModel_with_CSE_EOS_model(Interpolate_EOS_model):
             ndat_CSE (Int, optional):
                 Number of density points for constant speed-of-sound extension region.
                 Controls resolution of high-density exotic matter modeling. Defaults to 100.
-            nb_CSE (Int, optional):
-                Number of CSE grid points. This determines how many individual parameters
-                are expected: n_CSE_0_u, cs2_CSE_0, ..., n_CSE_{nb_CSE-1}_u, cs2_CSE_{nb_CSE-1},
-                plus cs2_CSE_{nb_CSE} (final value at nmax). Defaults to 8.
             **metamodel_kwargs:
                 Additional keyword arguments passed to the underlying MetaModel_EOS_model.
                 Includes parameters like kappas, v_nq, b_sat, b_sym, crust_name, etc.
@@ -94,7 +88,6 @@ class MetaModel_with_CSE_EOS_model(Interpolate_EOS_model):
         self.nmin_MM_nsat = nmin_MM_nsat
         self.ndat_metamodel = ndat_metamodel
         self.nmax_nsat = nmax_nsat
-        self.nb_CSE = nb_CSE
 
         # Use max_nbreak_nsat if provided, otherwise default to nmax_nsat
         # This allows optimization when the nbreak prior has a tighter upper bound
@@ -114,64 +107,97 @@ class MetaModel_with_CSE_EOS_model(Interpolate_EOS_model):
 
     def construct_eos(
         self,
-        params: dict[str, float],
-    ) -> EOSData:
+        NEP_dict: dict,
+        ngrids: Float[Array, "n_grid_point"],
+        cs2grids: Float[Array, "n_grid_point"],
+        return_extra: bool = False,
+        calculate_durca: bool | None = None,
+    ) -> tuple:
         r"""
         Construct the EOS by combining metamodel and CSE regions.
 
         This method constructs the full EOS by:
-        1. Extracting and processing CSE grid point parameters
-        2. Building the metamodel EOS up to the full nmax range
-        3. Interpolating the metamodel to a fixed-size grid up to nbreak
-        4. Stitching the CSE extension on top from nbreak to nmax
+        1. Building the metamodel EOS up to the full nmax range
+        2. Interpolating the metamodel to a fixed-size grid up to nbreak
+        3. Stitching the CSE extension on top from nbreak to nmax
 
         Args:
-            params (dict[str, float]): Dictionary containing:
-                - NEP parameters: E_sat, K_sat, Q_sat, Z_sat, E_sym, L_sym, K_sym, Q_sym, Z_sym
-                - Break density: nbreak
-                - CSE grid points: n_CSE_0_u, cs2_CSE_0, ..., n_CSE_{nb_CSE-1}_u, cs2_CSE_{nb_CSE-1}
-                - Final cs2 value: cs2_CSE_{nb_CSE}
+            NEP_dict (dict): Dictionary with the NEP keys to be passed to the metamodel EOS class.
+                Must include 'nbreak' specifying the transition density between metamodel and CSE.
+            ngrids (Float[Array, `n_grid_point`]): Density grid points for the CSE part of the EOS.
+            cs2grids (Float[Array, `n_grid_point`]): Speed-of-sound squared grid points for the CSE part.
+            return_extra (bool, optional): If True, return extra metamodel-specific quantities
+                (proton fraction, lepton fractions, DURCA density) in the output.
+                Defaults to False.
+            calculate_durca (bool | None, optional): If True, calculate the Direct Urca threshold density.
+                If None, uses the default from the metamodel instance. Defaults to None.
 
         Returns:
-            EOSData: Complete EOS with all required arrays in geometric units
+            tuple: EOS quantities (see Interpolate_EOS_model), as well as the chemical potential and speed of sound.
+                If return_extra=True, also returns a dict with metamodel-specific quantities.
 
         Note:
             The metamodel instance is reused from __init__ (not re-instantiated) and its output
             is interpolated to the actual nbreak value to maintain JAX compatibility with
             fixed array sizes.
-
-            CSE parameters are converted from individual normalized positions (n_CSE_i_u ∈ [0,1])
-            to physical density arrays (ngrids) via:
-            n_CSE_i = nbreak + n_CSE_i_u * (nmax - nbreak)
         """
 
-        # Extract break density
-        nbreak = params["nbreak"]
+        # Construct the metamodel part
+        # Get nbreak early for use in metamodel creation
+        nbreak = NEP_dict.get("nbreak", self.metamodel.nmax)
 
-        # Convert individual CSE grid point parameters to arrays
-        ngrids_u = jnp.array([params[f"n_CSE_{i}_u"] for i in range(self.nb_CSE)])
-        ngrids_u = jnp.sort(ngrids_u)  # Sort to ensure monotonic grid
-        cs2grids = jnp.array([params[f"cs2_CSE_{i}"] for i in range(self.nb_CSE)])
+        # We need to create a fresh instance when return_extra=True since the
+        # pre-instantiated metamodel in __init__ doesn't support this parameter
+        # We always request return_extra=True from the fresh instance and handle it here
+        if return_extra or calculate_durca:
+            # Determine proton_fraction setting from self.metamodel
+            # with_muon=True means 'exact', with_muon=False means 'approx'
+            proton_fraction_setting = "exact" if self.metamodel.with_muon else "approx"
+            # Use helper to create fresh metamodel instance limited to nbreak
+            metamodel = create_metamodel_for_extension(
+                nsat=self.metamodel.nsat,
+                nmin_MM_nsat=self.metamodel.nmin_MM_nsat,
+                nbreak=nbreak,
+                ndat=self.metamodel.ndat,
+                metamodel_kwargs={},
+                proton_fraction_setting=proton_fraction_setting,
+            )
+            # Always request extra to handle calculate_durca case
+            mm_output = metamodel.construct_eos(
+                NEP_dict, return_extra=True, calculate_durca=calculate_durca
+            )
+        else:
+            # Use pre-instantiated metamodel for efficiency
+            mm_output = self.metamodel.construct_eos(NEP_dict, return_extra=True)
 
-        # Convert from normalized positions [0,1] to physical densities [nbreak, nmax]
-        width = self.nmax - nbreak
-        ngrids = nbreak + ngrids_u * width
-
-        # Append final grid point at nmax
-        ngrids = jnp.append(ngrids, jnp.array([self.nmax]))
-        cs2grids = jnp.append(cs2grids, jnp.array([params[f"cs2_CSE_{self.nb_CSE}"]]))
-
-        # Construct the metamodel part using the pre-instantiated metamodel
-        # This gives us the full range up to nmax
-        mm_output = self.metamodel.construct_eos(params)
+        # Handle both return_extra=True and return_extra=False cases
+        if return_extra:
+            (
+                n_metamodel_full,
+                p_metamodel_full,
+                _,
+                e_metamodel_full,
+                _,
+                mu_metamodel_full,
+                cs2_metamodel_full,
+                extra,
+            ) = mm_output
+        else:
+            (
+                n_metamodel_full,
+                p_metamodel_full,
+                _,
+                e_metamodel_full,
+                _,
+                mu_metamodel_full,
+                cs2_metamodel_full,
+            ) = mm_output
+            extra = None
 
         # Convert units back for interpolation
-        n_metamodel_full = mm_output.ns / utils.fm_inv3_to_geometric
-        p_metamodel_full = mm_output.ps / utils.MeV_fm_inv3_to_geometric
-        e_metamodel_full = mm_output.es / utils.MeV_fm_inv3_to_geometric
-        # MetaModel guarantees mu is populated
-        mu_metamodel_full: Float[Array, "n_points"] = mm_output.mu  # type: ignore[assignment]
-        cs2_metamodel_full = mm_output.cs2
+        n_metamodel_full = n_metamodel_full / utils.fm_inv3_to_geometric
+        p_metamodel_full = p_metamodel_full / utils.MeV_fm_inv3_to_geometric
+        e_metamodel_full = e_metamodel_full / utils.MeV_fm_inv3_to_geometric
 
         # Re-interpolate to a fixed-size array up to nbreak
         # This maintains JAX compatibility while allowing variable nbreak
@@ -208,38 +234,30 @@ class MetaModel_with_CSE_EOS_model(Interpolate_EOS_model):
         p = jnp.concatenate((p_metamodel, p_CSE))
         e = jnp.concatenate((e_metamodel, e_CSE))
 
+        # TODO: let's decide whether we want to save cs2 and mu or just use them for computation and then discard them.
         mu = jnp.concatenate((mu_metamodel, mu_CSE))
         cs2 = jnp.concatenate((cs2_metamodel, cs2_CSE))
 
         ns, ps, hs, es, dloge_dlogps = self.interpolate_eos(n, p, e)
 
-        return EOSData(
-            ns=ns,
-            ps=ps,
-            hs=hs,
-            es=es,
-            dloge_dlogps=dloge_dlogps,
-            cs2=cs2,
-            mu=mu,
-            extra_constraints=None,
-        )
+        # Note: Particle fractions are already limited to nbreak because we create
+        # a fresh metamodel instance limited to nbreak when return_extra=True.
+        # No cropping needed - the CSE extension doesn't have particle fraction data
+        # but that's fine since the metamodel only generates them up to nbreak.
+
+        if return_extra:
+            return ns, ps, hs, es, dloge_dlogps, mu, cs2, extra
+        return ns, ps, hs, es, dloge_dlogps, mu, cs2
 
     def get_required_parameters(self) -> list[str]:
-        """
+        r"""
         Return list of parameters required by MetaModel with CSE.
 
         Returns:
-            list[str]: NEP parameters + nbreak + individual CSE grid point parameters
-                ["E_sat", "K_sat", "Q_sat", "Z_sat", "E_sym", "L_sym", "K_sym", "Q_sym", "Z_sym",
-                 "nbreak", "n_CSE_0_u", "cs2_CSE_0", ..., "n_CSE_{nb_CSE-1}_u", "cs2_CSE_{nb_CSE-1}",
-                 "cs2_CSE_{nb_CSE}"]
-
-        Note:
-            The individual grid point parameters (n_CSE_i_u, cs2_CSE_i) are converted
-            internally by construct_eos() to arrays (ngrids, cs2grids).
+            list[str]: NEP parameters + nbreak
+                ["E_sat", "K_sat", "Q_sat", "Z_sat", "E_sym", "L_sym", "K_sym", "Q_sym", "Z_sym", "nbreak"]
         """
-        # NEP parameters
-        params = [
+        return [
             "E_sat",
             "K_sat",
             "Q_sat",
@@ -251,10 +269,3 @@ class MetaModel_with_CSE_EOS_model(Interpolate_EOS_model):
             "Z_sym",
             "nbreak",
         ]
-        # CSE grid point parameters
-        for i in range(self.nb_CSE):
-            params.extend([f"n_CSE_{i}_u", f"cs2_CSE_{i}"])
-        # Final cs2 value at nmax
-        params.append(f"cs2_CSE_{self.nb_CSE}")
-
-        return params

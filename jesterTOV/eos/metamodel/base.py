@@ -1,13 +1,14 @@
 r"""Meta-model equation of state for nuclear matter."""
 
+import jax
 import jax.numpy as jnp
+import optimistix as optx
 from jax.scipy.special import factorial
 from jaxtyping import Array, Float, Int
 
 from jesterTOV import utils
 from jesterTOV.eos.base import Interpolate_EOS_model
 from jesterTOV.eos.crust import Crust
-from jesterTOV.tov.data_classes import EOSData
 from jesterTOV.logging_config import get_logger
 
 logger = get_logger("jester")
@@ -57,7 +58,8 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
         min_n_crust_nsat: Float = 2e-13,
         ndat_spline: Int = 10,
         # proton fraction
-        proton_fraction: bool | float | None = None,
+        proton_fraction: bool | float | str | None = None,
+        calculate_durca: bool = False,
     ):
         r"""
         Initialize the meta-model EOS with nuclear empirical parameters.
@@ -145,11 +147,32 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
         self.min_n_crust_nsat = min_n_crust_nsat
         self.ndat_spline = ndat_spline
 
+        # Proton fraction configuration
+        # Default: exact beta-equilibrium with muons (proton_fraction=None)
+        # "approx": approximate beta-equilibrium without muons
+        # float: fixed proton fraction value
+        # "exact": explicit exact calculation (same as default)
         if isinstance(proton_fraction, float):
             self.proton_fraction_val = proton_fraction
             self.proton_fraction = lambda x, y: self.proton_fraction_val
-        else:
+            self.with_muon = False
+            print(f"Proton fraction fixed to {self.proton_fraction_val}")
+        elif proton_fraction == "approx":
+            # Approximate beta-equilibrium without muons (legacy behavior)
             self.proton_fraction = lambda x, y: self.compute_proton_fraction(x, y)
+            self.with_muon = False
+        elif proton_fraction == "exact" or proton_fraction is None:
+            # Exact beta-equilibrium with muons (default behavior)
+            self.proton_fraction = lambda x, y: self.compute_proton_fraction_exact(x, y)
+            self.with_muon = True
+        else:
+            # Default to exact calculation with muons
+            self.proton_fraction = lambda x, y: self.compute_proton_fraction_exact(x, y)
+            self.with_muon = True
+
+        # DURCA calculation configuration
+        self.calculate_durca = calculate_durca
+        self.durca_density = {"ye": jnp.nan, "ym": jnp.nan, "nb_durca": jnp.nan}
 
         # Constructions
         assert (
@@ -290,7 +313,12 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
         )
 
     # TODO: improve type hinting here
-    def construct_eos(self, params: dict[str, float]) -> EOSData:
+    def construct_eos(
+        self,
+        NEP_dict: dict,
+        return_extra: bool = False,
+        calculate_durca: bool | None = None,
+    ) -> tuple:
         r"""
         Construct the complete equation of state from nuclear empirical parameters.
 
@@ -298,7 +326,7 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
         meta-model core, ensuring thermodynamic consistency and causality.
 
         Args:
-            params: Nuclear empirical parameters including:
+            NEP_dict (dict): Nuclear empirical parameters including:
 
                 - **E_sat**: Saturation energy per nucleon [:math:`\mathrm{MeV}`] (default: -16.0)
                 - **K_sat**: Incompressibility at saturation [:math:`\mathrm{MeV}`]
@@ -308,21 +336,29 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
                 - **K_sym, Q_sym, Z_sym**: Higher-order symmetry parameters [:math:`\mathrm{MeV}`]
 
         Returns:
-            EOSData: Complete EOS with all required arrays
+            tuple: Complete EOS data containing:
+
+                - **ns**: Number densities [geometric units]
+                - **ps**: Pressures [geometric units]
+                - **hs**: Specific enthalpies [geometric units]
+                - **es**: Energy densities [geometric units]
+                - **dloge_dlogps**: Logarithmic derivative :math:`\frac{d\ln\varepsilon}{d\ln p}`
+                - **mu**: Chemical potential [geometric units]
+                - **cs2**: Speed of sound squared :math:`c_s^2 = \frac{dp}{d\varepsilon}`
         """
-        # Use the old parameter name internally for compatibility
-        NEP_dict = params
 
-        E_sat = NEP_dict["E_sat"]
-        K_sat = NEP_dict["K_sat"]
-        Q_sat = NEP_dict["Q_sat"]
-        Z_sat = NEP_dict["Z_sat"]
+        E_sat = NEP_dict.get(
+            "E_sat", -16.0
+        )  # NOTE: this is a commong default value, therefore not zero!
+        K_sat = NEP_dict.get("K_sat", 0.0)
+        Q_sat = NEP_dict.get("Q_sat", 0.0)
+        Z_sat = NEP_dict.get("Z_sat", 0.0)
 
-        E_sym = NEP_dict["E_sym"]
-        L_sym = NEP_dict["L_sym"]
-        K_sym = NEP_dict["K_sym"]
-        Q_sym = NEP_dict["Q_sym"]
-        Z_sym = NEP_dict["Z_sym"]
+        E_sym = NEP_dict.get("E_sym", 0.0)
+        L_sym = NEP_dict.get("L_sym", 0.0)
+        K_sym = NEP_dict.get("K_sym", 0.0)
+        Q_sym = NEP_dict.get("Q_sym", 0.0)
+        Z_sym = NEP_dict.get("Z_sym", 0.0)
 
         # Add the first derivative coefficient in Esat to make it work with jax.numpy.polyval
         coefficient_sat = jnp.array([E_sat, 0.0, K_sat, Q_sat, Z_sat])
@@ -345,7 +381,7 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
                 Z_sat + self.v_sat_4_no_NEP,
             ]
         )
-
+        self.v_sat = v_sat
         # v_sym2 is defined in equations (27) to (31) in the Margueron et al. paper
         v_sym2 = jnp.array(
             [
@@ -356,10 +392,23 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
                 Z_sym + self.v_sym2_4_no_NEP,
             ]
         )
-
+        self.v_sym2 = v_sym2
         # Auxiliaries first
         x = self.compute_x(self.n_metamodel)
-        proton_fraction = self.proton_fraction(coefficient_sym, self.n_metamodel)
+        # Handle calculate_durca: use instance default if not provided
+        if calculate_durca is None:
+            calculate_durca = getattr(self, "calculate_durca", False)
+        self.calculate_durca = calculate_durca
+        self.durca_density = {"ye": jnp.nan, "ym": jnp.nan, "nb_durca": jnp.nan}
+        if self.with_muon == True:
+            proton_fraction, e_fraction, muon_fraction = self.proton_fraction(
+                coefficient_sym, self.n_metamodel
+            )
+        else:
+            proton_fraction = self.proton_fraction(coefficient_sym, self.n_metamodel)
+            e_fraction = None
+            muon_fraction = None
+
         delta = 1 - 2 * proton_fraction
 
         f_1 = self.compute_f_1(delta)
@@ -386,8 +435,8 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
             f_star3,
             b,
             v,
+            e_fraction,
         )
-
         # Spline for speed of sound for the connection region
         cs2_spline = jnp.append(jnp.array(self.cs2_crust), cs2_metamodel)
 
@@ -410,35 +459,24 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
 
         ns, ps, hs, es, dloge_dlogps = self.interpolate_eos(n, p, e)
 
-        return EOSData(
-            ns=ns,
-            ps=ps,
-            hs=hs,
-            es=es,
-            dloge_dlogps=dloge_dlogps,
-            cs2=cs2,
-            mu=mu,
-            extra_constraints=None,
-        )
+        if return_extra:
+            # Build extra dict with metamodel-specific quantities
+            extra = {
+                "n_metamodel_orig": self.n_metamodel,
+                "proton_fraction": proton_fraction,
+            }
+            # Add lepton fractions only if muons are included (exact calculation)
+            if self.with_muon and e_fraction is not None:
+                extra["e_fraction"] = e_fraction
+                extra["muon_fraction"] = muon_fraction
+            # Add DURCA density if calculated
+            if self.calculate_durca:
+                extra["durca_density"] = self.durca_density
 
-    def get_required_parameters(self) -> list[str]:
-        """
-        Return list of nuclear empirical parameters required by MetaModel.
-
-        Returns:
-            list[str]: ["E_sat", "K_sat", "Q_sat", "Z_sat", "E_sym", "L_sym", "K_sym", "Q_sym", "Z_sym"]
-        """
-        return [
-            "E_sat",
-            "K_sat",
-            "Q_sat",
-            "Z_sat",
-            "E_sym",
-            "L_sym",
-            "K_sym",
-            "Q_sym",
-            "Z_sym",
-        ]
+            output = ns, ps, hs, es, dloge_dlogps, mu, cs2, extra
+        else:
+            output = ns, ps, hs, es, dloge_dlogps, mu, cs2
+        return output
 
     #################
     ### AUXILIARY ###
@@ -505,6 +543,25 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
 
         return kinetic_energy + potential_energy
 
+    def compute_energy_simple(
+        self,
+        n_n: Array,
+        n_p: Array,
+    ) -> Array:
+
+        x = self.compute_x(n_n + n_p)
+        proton_fraction = n_p / (n_n + n_p)
+
+        delta = 1 - 2 * proton_fraction
+        f_1 = self.compute_f_1(delta)
+        f_star = self.compute_f_star(delta)
+        f_star2 = self.compute_f_star2(delta)
+        f_star3 = self.compute_f_star3(delta)
+        v = self.compute_v(self.v_sat, self.v_sym2, delta)
+        b = self.compute_b(delta)
+        e_metamodel = self.compute_energy(x, f_1, f_star, f_star2, f_star3, b, v)
+        return e_metamodel
+
     def esym(self, coefficient_sym: list, x: Array):
         # TODO: change this to be self-consistent: see Rahul's approach for that.
         return jnp.polyval(jnp.array(coefficient_sym[::-1]), x)
@@ -568,6 +625,7 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
         f_star3: Array,
         b: Array,
         v: Array,
+        e_fraction: Array | None = None,
     ):
 
         ### Compute incompressibility
@@ -619,28 +677,67 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
 
         K = K_kin + K_pot + 18 / n * p
 
-        # For electron
-
+        proton_fraction = (1 - delta) / 2
         K_Fb = (3.0 * jnp.pi**2 / 2.0 * n) ** (1.0 / 3.0) * utils.hbarc
-        K_Fe = K_Fb * (1.0 - delta) ** (1.0 / 3.0)
-        C = utils.m_e**4 / (8.0 * jnp.pi**2) / utils.hbarc**3
-        x = K_Fe / utils.m_e
-        f = x * (1 + 2 * x**2) * jnp.sqrt(1 + x**2) - jnp.arcsinh(x)
+        if e_fraction is None:
+            # Case: Electron only
+            e_fraction = proton_fraction
+            K_Fe = (3.0 * (jnp.pi**2) * n * e_fraction) ** (1.0 / 3.0) * utils.hbarc
+            C_e = utils.m_e**4 / (8.0 * jnp.pi**2) / utils.hbarc**3
+            x_e = K_Fe / utils.m_e
+            f = x_e * (1 + 2 * x_e**2) * jnp.sqrt(1 + x_e**2) - jnp.arcsinh(x_e)
 
-        e_electron = C * f
-        p_electron = -e_electron + 8.0 / 3.0 * C * x**3 * jnp.sqrt(1 + x**2)
-        K_electron = 8 * C / n * x**3 * (3 + 4 * x**2) / (
-            jnp.sqrt(1 + x**2)
-        ) - 9 / n * (e_electron + p_electron)
+            e_electron = C_e * f
+            p_electron = -e_electron + 8.0 / 3.0 * C_e * x_e**3 * jnp.sqrt(1 + x_e**2)
+            K_electron = 8 * C_e / n * x_e**3 * (3 + 4 * x_e**2) / (
+                jnp.sqrt(1 + x_e**2)
+            ) - 9 / n * (e_electron + p_electron)
 
-        # Sum together:
-        K_tot = K + K_electron
+            K_lepton = K_electron
+            e_lepton = e_electron
+            p_lepton = p_electron
+        else:
+            # Case: Both electron and muon
+            # For electron
+            muon_fraction = jnp.maximum(
+                1e-25, proton_fraction - e_fraction
+            )  # Avoid zero divs
+
+            K_Fe = (3.0 * (jnp.pi**2) * n * e_fraction) ** (1.0 / 3.0) * utils.hbarc
+            C_e = utils.m_e**4 / (8.0 * jnp.pi**2) / utils.hbarc**3
+            x_e = K_Fe / utils.m_e
+            f = x_e * (1 + 2 * x_e**2) * jnp.sqrt(1 + x_e**2) - jnp.arcsinh(x_e)
+
+            e_electron = C_e * f
+            p_electron = -e_electron + 8.0 / 3.0 * C_e * x_e**3 * jnp.sqrt(1 + x_e**2)
+            K_electron = 8 * C_e / n * x_e**3 * (3 + 4 * x_e**2) / (
+                jnp.sqrt(1 + x_e**2)
+            ) - 9 / n * (e_electron + p_electron)
+
+            # Muon
+            K_Fmu = (3.0 * (jnp.pi**2) * n * muon_fraction) ** (1.0 / 3.0) * utils.hbarc
+            C_mu = utils.m_mu**4 / (8.0 * jnp.pi**2) / utils.hbarc**3
+            x_mu = K_Fmu / utils.m_mu
+            f = x_mu * (1 + 2 * x_mu**2) * jnp.sqrt(1 + x_mu**2) - jnp.arcsinh(x_mu)
+
+            e_muon = C_mu * f
+            p_muon = -e_muon + 8.0 / 3.0 * C_mu * x_mu**3 * jnp.sqrt(1 + x_mu**2)
+            K_muon = 8 * C_mu / n * x_mu**3 * (3 + 4 * x_mu**2) / (
+                jnp.sqrt(1 + x_mu**2)
+            ) - 9 / n * (e_muon + p_muon)
+
+            K_lepton = K_electron + K_muon
+            e_lepton = e_electron + e_muon
+            p_lepton = p_electron + p_muon
+
+        K_tot = K + K_lepton
 
         # Finally, get cs2:
         chi = K_tot / 9.0
 
-        total_energy_density = (e + utils.m) * n + e_electron
-        total_pressure = p + p_electron
+        total_energy_density = (e + utils.m) * n + e_lepton
+        total_pressure = p + p_lepton
+
         h_tot = (total_energy_density + total_pressure) / n
 
         cs2 = chi / h_tot
@@ -687,12 +784,32 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
         # p_2 = 0
         # p_3 = 8 * Esym
 
+        # Hint: don't be confused between x in self.compute_x and x_p = y_p = proton fraction
+
         Esym = self.esym(coefficient_sym, n)
 
-        a = 8.0 * Esym
-        b = jnp.zeros(shape=n.shape)
-        c = utils.hbarc * jnp.power(3.0 * jnp.pi**2 * n, 1.0 / 3.0)
-        d = -4.0 * Esym - (utils.m_n - utils.m_p)
+        # a = 8.0 * Esym
+        # b = jnp.zeros(shape=n.shape)
+        # c = utils.hbarc * jnp.power(3.0 * jnp.pi**2 * n, 1.0 / 3.0)
+        # d = -4.0 * Esym - (utils.m_n - utils.m_p)
+
+        # a = - 8.0 * Esym
+        # b = jnp.zeros(shape=n.shape)
+        # c = - utils.hbarc * jnp.power(3.0 * jnp.pi**2 * n, 1.0 / 3.0)
+        # d = 4.0 * Esym + (utils.m_n - utils.m_p - utils.m_e)
+
+        fres = 4 * Esym
+        deltam = utils.m_p + utils.m_e - utils.m_n
+
+        a = -8.0 * fres**3
+        b = (3 * fres**3 - 3 * deltam * fres**2) * 4
+        c = (
+            -6 * fres**3
+            + 4 * 3 * deltam * fres**2
+            - 6 * fres * deltam**2
+            - utils.hbarc**3 * 3 * jnp.pi**2 * n
+        )
+        d = fres**3 - 3 * deltam * fres**2 + 3 * fres * deltam**2 - deltam**3
 
         coeffs = jnp.array(
             [
@@ -708,5 +825,207 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
             ys.real,
             jnp.zeros_like(ys.real),
         ).sum(axis=1)
-        proton_fraction = jnp.power(physical_ys, 3)
+
+        # proton_fraction = jnp.power(physical_ys, 3)
+        proton_fraction = physical_ys
         return proton_fraction
+
+    def compute_proton_fraction_exact(
+        self, coefficient_sym: list, n: Array
+    ) -> Float[Array, "n_points"]:
+        r""" """
+
+        def muElec(ne):
+            kfe = jnp.power(3 * jnp.pi * jnp.pi * ne, 1.0 / 3.0)
+            xe = utils.hbarc * kfe / utils.m_e
+            mue = utils.m_e * jnp.sqrt(1 + xe * xe)
+            return mue
+
+        def muMuon(nm):
+            nmu_safe = jnp.clip(nm, 1e-12, None)
+            kf = (3 * jnp.pi * jnp.pi * nmu_safe) ** (1 / 3)
+            xm = utils.hbarc * kf / utils.m_mu
+            mu = utils.m_mu * jnp.sqrt(1 + xm * xm)
+            return mu
+        def guess_val_p(n):
+            n_per_nsat = n/utils.fm_inv3_to_geometric / 0.16
+            return 1/30 * n_per_nsat + 1/60
+        def guess_val_mu(n):
+            n_per_nsat = n/utils.fm_inv3_to_geometric / 0.16
+            return 0.0075 * n_per_nsat
+        # compute_energy_simple(nn,np)
+        total_energy_density = lambda n_n, n_p: (
+            n_n + n_p
+        ) * self.compute_energy_simple(n_n, n_p)
+        nu_p = jax.grad(total_energy_density, argnums=1)
+        nu_n = jax.grad(total_energy_density, argnums=0)
+
+        def betaHMnpe_optimistix(guessYe, nb):
+            def fn(z, args=nb):
+                y = z
+                n_n = nb * (1 - y)
+                n_p = nb * y
+                mue = muElec(nb * y)
+                mun = nu_n(n_n, n_p) + utils.m_n
+                mup = nu_p(n_n, n_p) + utils.m_p
+                f = (mun - mup - mue) / mun
+                return f
+
+            # jax.debug.print("f: {f}", f=fn(0.04))
+            guessYp = guess_val_p(nb)
+            z0 = jnp.array(guessYp)
+            solver = optx.Dogleg(rtol=1e-5, atol=1e-6)
+            solYe = optx.root_find(fn, solver, z0, throw=False)
+            return solYe.value
+
+        def betaHMnpemu_optimistix(guess, nb):
+            def fn(z, args):
+                y1, y2 = z
+                y = y1 + y2
+                n_n = nb * (1 - y)
+                n_p = nb * y
+                mun = nu_n(n_n, n_p) + utils.m_n
+                mup = nu_p(n_n, n_p) + utils.m_p
+                mue = muElec(nb * y1)
+                mumu = muMuon(nb * y2)
+                f1 = (mun - mup - mue) / mun
+                f2 = (mumu - mue) / mue
+                return f1, f2
+
+            guess = [guess_val_p(nb),1.0e-9]
+            z0 = jnp.array(guess)
+            solver = optx.Newton(rtol=1e-5, atol=1e-6)
+            sol = optx.root_find(fn, solver, z0, throw=False)
+            return sol.value
+
+        @jax.jit
+        def calc_ye_all_jit(guess_val, nb_array):
+            return jax.vmap(lambda nb: betaHMnpe_optimistix(guess_val, nb))(nb_array)
+
+        @jax.jit
+        def calc_conditional_fractions(guess_vec, nb_full, cond_mask, ye_arr):
+            # Calculate fractions for all densities with conditional logic
+            def compute_for_single(nb, has_muon, ye):
+                # Use jax.lax.cond to choose which solver to use
+                result = jax.lax.cond(
+                    has_muon,
+                    lambda: betaHMnpemu_optimistix(guess_vec, nb),  # with muons
+                    lambda: jnp.array([ye, 0.0]),  # electron-only, no muons
+                )
+                return result
+
+            # Vectorize over all densities
+            return jax.vmap(compute_for_single)(nb_full, cond_mask, ye_arr)
+
+        guess = [0.04, 1.0e-9]
+        ye_arr = calc_ye_all_jit(guess[0], n)
+        cond = muElec(n * ye_arr) > utils.m_mu
+        # Calculate fractions with conditional logic
+        final_arr = calc_conditional_fractions(guess, n, cond, ye_arr)
+
+        yp_arr = final_arr[:, 0] + final_arr[:, 1]
+
+        ye_array = jnp.array(final_arr[:, 0])
+        ymu_array = jnp.array(final_arr[:, 1])
+        yp_array = jnp.array(yp_arr)
+
+        proton_fraction = yp_array
+        electron_fraction = ye_array
+        muon_fraction = ymu_array
+
+        # # Direct Urca Process
+        # def durca(guess):
+        #     def fd(z, args):
+        #         ye, ym, nb = z
+        #         y = ye + ym
+        #         n_n = nb*(1-y)
+        #         n_p = nb*y
+        #         mue = muElec(nb * ye)
+        #         mun = nu_n( n_n, n_p ) + utils.m_n
+        #         mup = nu_p( n_n, n_p ) + utils.m_p
+        #         mumuon = muMuon(nb * ym)
+        #         f1 = (mun - mup - mue)/mun
+        #         f2 = (mue - mumuon)/mue
+        #         f3 = (jnp.cbrt(1-y) - jnp.cbrt(y) - jnp.cbrt(ye))/jnp.cbrt(1-y)
+        #         return f1, f2, f3 # normalized minimize conditons
+
+        #     z0  = jnp.array(guess)
+        #     solver = optx.Newton(rtol=1e-7, atol=1e-7)
+        #     sols   = optx.root_find(fd, solver, z0, throw=False)
+        #     final_residuals = fd(sols.value, None)
+
+        #     return sols.value, sols.stats, final_residuals
+        # if self.calculate_durca is True:
+        #     guessDurca=[0.06, 0.06, 0.25]
+        #     solution, stats, residuals = durca(guessDurca)
+        #     self.durca_density = solution
+        if self.calculate_durca is True:
+            x_e = electron_fraction / (electron_fraction + muon_fraction)
+            x_DU = 1 / (1 + (1 + jnp.cbrt(x_e)) ** 3)
+            x_DU_curve = jnp.array([n, x_DU])
+            y_p_curve = jnp.array([n, yp_array])
+            nb_durca, yp_durca = utils.get_curve_intersection(x_DU_curve, y_p_curve)
+            ye = jnp.interp(nb_durca, n, ye_array)
+            ym = jnp.interp(nb_durca, n, ymu_array)
+            self.durca_density = {"ye": ye, "ym": ym, "nb_durca": nb_durca}
+
+        return proton_fraction, electron_fraction, muon_fraction
+
+    def get_required_parameters(self) -> list[str]:
+        r"""
+        Return list of nuclear empirical parameters required by MetaModel.
+
+        Returns:
+            list[str]: ["E_sat", "K_sat", "Q_sat", "Z_sat", "E_sym", "L_sym", "K_sym", "Q_sym", "Z_sym"]
+        """
+        return [
+            "E_sat",
+            "K_sat",
+            "Q_sat",
+            "Z_sat",
+            "E_sym",
+            "L_sym",
+            "K_sym",
+            "Q_sym",
+            "Z_sym",
+        ]
+
+
+# =============================================================================
+# Helper functions for CSE/peakCSE extensions
+# =============================================================================
+
+
+def create_metamodel_for_extension(
+    nsat: Float,
+    nmin_MM_nsat: Float,
+    nbreak: Float,
+    ndat: Int,
+    metamodel_kwargs: dict,
+    proton_fraction_setting: str = "exact",
+) -> MetaModel_EOS_model:
+    r"""
+    Create a MetaModel_EOS_model instance for use with CSE/peakCSE extensions.
+
+    This helper ensures the proton_fraction setting is properly propagated to
+    the metamodel instance.
+
+    Args:
+        nsat: Nuclear saturation density [:math:`\mathrm{fm}^{-3}`]
+        nmin_MM_nsat: Starting density for meta-model region as fraction of nsat
+        nbreak: Break density for transition to extension region [:math:`\mathrm{fm}^{-3}`]
+        ndat: Number of density points for discretization
+        metamodel_kwargs: Additional keyword arguments for MetaModel_EOS_model
+        proton_fraction_setting: Either "exact" (with muons) or "approx" (without muons)
+
+    Returns:
+        MetaModel_EOS_model instance configured for the extension
+    """
+    return MetaModel_EOS_model(
+        nsat=nsat,
+        nmin_MM_nsat=nmin_MM_nsat,
+        nmax_nsat=nbreak / nsat,
+        ndat=ndat,
+        proton_fraction=proton_fraction_setting,
+        **metamodel_kwargs,
+    )
