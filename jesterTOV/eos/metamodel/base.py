@@ -10,6 +10,7 @@ from jesterTOV import utils
 from jesterTOV.eos.base import Interpolate_EOS_model
 from jesterTOV.eos.crust import Crust
 from jesterTOV.logging_config import get_logger
+from jesterTOV.tov.data_classes import EOSData
 
 logger = get_logger("jester")
 
@@ -312,13 +313,12 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
             self.max_n_crust + 1e-5, self.nmin_MM, self.ndat_spline, endpoint=False
         )
 
-    # TODO: improve type hinting here
     def construct_eos(
         self,
         NEP_dict: dict,
         return_extra: bool = False,
         calculate_durca: bool | None = None,
-    ) -> tuple:
+    ) -> EOSData:
         r"""
         Construct the complete equation of state from nuclear empirical parameters.
 
@@ -335,8 +335,13 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
                 - **L_sym**: Symmetry energy slope [:math:`\mathrm{MeV}`]
                 - **K_sym, Q_sym, Z_sym**: Higher-order symmetry parameters [:math:`\mathrm{MeV}`]
 
+            return_extra (bool, optional): Kept for backward compatibility, currently
+                has no effect (extra data is always included in EOSData.mu and cs2).
+            calculate_durca (bool | None, optional): If True, calculate the Direct Urca
+                threshold density. If None, uses the instance default.
+
         Returns:
-            tuple: Complete EOS data containing:
+            EOSData: Complete EOS data containing:
 
                 - **ns**: Number densities [geometric units]
                 - **ps**: Pressures [geometric units]
@@ -345,6 +350,7 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
                 - **dloge_dlogps**: Logarithmic derivative :math:`\frac{d\ln\varepsilon}{d\ln p}`
                 - **mu**: Chemical potential [geometric units]
                 - **cs2**: Speed of sound squared :math:`c_s^2 = \frac{dp}{d\varepsilon}`
+                - **extra_constraints**: None (no additional constraints)
         """
 
         E_sat = NEP_dict.get(
@@ -459,24 +465,27 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
 
         ns, ps, hs, es, dloge_dlogps = self.interpolate_eos(n, p, e)
 
-        if return_extra:
-            # Build extra dict with metamodel-specific quantities
-            extra = {
-                "n_metamodel_orig": self.n_metamodel,
-                "proton_fraction": proton_fraction,
-            }
-            # Add lepton fractions only if muons are included (exact calculation)
-            if self.with_muon and e_fraction is not None:
-                extra["e_fraction"] = e_fraction
-                extra["muon_fraction"] = muon_fraction
-            # Add DURCA density if calculated
-            if self.calculate_durca:
-                extra["durca_density"] = self.durca_density
+        # Build extra dict for backward compatibility when return_extra=True
+        extra = {
+            "n_metamodel_orig": self.n_metamodel,
+            "proton_fraction": proton_fraction,
+            "e_fraction": e_fraction,
+            "muon_fraction": muon_fraction,
+            "durca_density": self.durca_density,
+        }
 
-            output = ns, ps, hs, es, dloge_dlogps, mu, cs2, extra
-        else:
-            output = ns, ps, hs, es, dloge_dlogps, mu, cs2
-        return output
+        # Build EOSData for inference compatibility
+        # Note: mu is always included for metamodel, cs2 is always computed
+        return EOSData(
+            ns=ns,
+            ps=ps,
+            hs=hs,
+            es=es,
+            dloge_dlogps=dloge_dlogps,
+            cs2=cs2,
+            mu=mu,
+            extra_constraints=extra,
+        )
 
     #################
     ### AUXILIARY ###

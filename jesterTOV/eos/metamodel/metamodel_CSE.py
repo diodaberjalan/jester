@@ -1,5 +1,7 @@
 r"""Meta-model EOS with piecewise constant speed-of-sound extensions (CSE)."""
 
+from typing import Any, Union
+
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
@@ -9,6 +11,7 @@ from jesterTOV.eos.metamodel.base import (
     MetaModel_EOS_model,
     create_metamodel_for_extension,
 )
+from jesterTOV.tov.data_classes import EOSData
 
 
 class MetaModel_with_CSE_EOS_model(Interpolate_EOS_model):
@@ -34,6 +37,7 @@ class MetaModel_with_CSE_EOS_model(Interpolate_EOS_model):
         max_nbreak_nsat: Float | None = None,
         ndat_metamodel: Int = 100,
         ndat_CSE: Int = 100,
+        nb_CSE: int = 0,
         **metamodel_kwargs,
     ):
         r"""
@@ -66,6 +70,9 @@ class MetaModel_with_CSE_EOS_model(Interpolate_EOS_model):
             ndat_CSE (Int, optional):
                 Number of density points for constant speed-of-sound extension region.
                 Controls resolution of high-density exotic matter modeling. Defaults to 100.
+            nb_CSE (int, optional):
+                Number of CSE grid points. If > 0, CSE grid parameters are generated
+                from the NEP_dict in construct_eos. Defaults to 0.
             **metamodel_kwargs:
                 Additional keyword arguments passed to the underlying MetaModel_EOS_model.
                 Includes parameters like kappas, v_nq, b_sat, b_sym, crust_name, etc.
@@ -88,6 +95,7 @@ class MetaModel_with_CSE_EOS_model(Interpolate_EOS_model):
         self.nmin_MM_nsat = nmin_MM_nsat
         self.ndat_metamodel = ndat_metamodel
         self.nmax_nsat = nmax_nsat
+        self.nb_CSE = nb_CSE
 
         # Use max_nbreak_nsat if provided, otherwise default to nmax_nsat
         # This allows optimization when the nbreak prior has a tighter upper bound
@@ -108,11 +116,11 @@ class MetaModel_with_CSE_EOS_model(Interpolate_EOS_model):
     def construct_eos(
         self,
         NEP_dict: dict,
-        ngrids: Float[Array, "n_grid_point"],
-        cs2grids: Float[Array, "n_grid_point"],
+        ngrids: Float[Array, "n_grid_point"] | None = None,
+        cs2grids: Float[Array, "n_grid_point"] | None = None,
         return_extra: bool = False,
         calculate_durca: bool | None = None,
-    ) -> tuple:
+    ) -> Union[EOSData, tuple]:
         r"""
         Construct the EOS by combining metamodel and CSE regions.
 
@@ -124,27 +132,45 @@ class MetaModel_with_CSE_EOS_model(Interpolate_EOS_model):
         Args:
             NEP_dict (dict): Dictionary with the NEP keys to be passed to the metamodel EOS class.
                 Must include 'nbreak' specifying the transition density between metamodel and CSE.
-            ngrids (Float[Array, `n_grid_point`]): Density grid points for the CSE part of the EOS.
-            cs2grids (Float[Array, `n_grid_point`]): Speed-of-sound squared grid points for the CSE part.
-            return_extra (bool, optional): If True, return extra metamodel-specific quantities
-                (proton fraction, lepton fractions, DURCA density) in the output.
-                Defaults to False.
+                CSE grid parameters (n_CSE_i_u, cs2_CSE_i) are extracted from this dict if
+                ngrids/cs2grids are not provided.
+            ngrids (Float[Array, `n_grid_point`], optional): Density grid points for the CSE part.
+                If None, extracted from NEP_dict using nb_CSE.
+            cs2grids (Float[Array, `n_grid_point`], optional): Speed-of-sound squared grid points.
+                If None, extracted from NEP_dict using nb_CSE.
+            return_extra (bool, optional): Kept for backward compatibility. If True, returns
+                a tuple ``(ns, ps, hs, es, dloge_dlogps, mu, cs2, extra)`` for backward
+                compatibility with older notebooks.
             calculate_durca (bool | None, optional): If True, calculate the Direct Urca threshold density.
-                If None, uses the default from the metamodel instance. Defaults to None.
 
         Returns:
-            tuple: EOS quantities (see Interpolate_EOS_model), as well as the chemical potential and speed of sound.
-                If return_extra=True, also returns a dict with metamodel-specific quantities.
-
-        Note:
-            The metamodel instance is reused from __init__ (not re-instantiated) and its output
-            is interpolated to the actual nbreak value to maintain JAX compatibility with
-            fixed array sizes.
+            Union[EOSData, tuple]:
+                - If ``return_extra=False`` (default): :class:`EOSData` object for inference compatibility.
+                - If ``return_extra=True``: tuple ``(ns, ps, hs, es, dloge_dlogps, mu, cs2, extra)``
+                  where ``extra`` is a dict with particle fractions and durca data.
         """
 
         # Construct the metamodel part
         # Get nbreak early for use in metamodel creation
         nbreak = NEP_dict.get("nbreak", self.metamodel.nmax)
+
+        # Extract CSE grid parameters from NEP_dict if not provided
+        if ngrids is None or cs2grids is None:
+            # Build CSE grid parameters from NEP_dict
+            # n_CSE_i_u are normalized positions (0 to 1), cs2_CSE_i are cs2 values
+            ngrids = jnp.array([])
+            cs2grids = jnp.array([])
+            if self.nb_CSE > 0:
+                # Extract n_CSE_i_u and cs2_CSE_i from NEP_dict
+                for i in range(self.nb_CSE):
+                    n_u = NEP_dict.get(f"n_CSE_{i}_u", 0.5)  # Default to midpoint
+                    # Convert normalized position to actual density
+                    n_density = nbreak + n_u * (self.nmax - nbreak)
+                    ngrids = jnp.append(ngrids, jnp.array([n_density]))
+                    cs2grids = jnp.append(cs2grids, jnp.array([NEP_dict.get(f"cs2_CSE_{i}", 0.5)]))
+                # Add final cs2 at nmax
+                ngrids = jnp.append(ngrids, jnp.array([self.nmax]))
+                cs2grids = jnp.append(cs2grids, jnp.array([NEP_dict.get(f"cs2_CSE_{self.nb_CSE}", 0.5)]))
 
         # We need to create a fresh instance when return_extra=True since the
         # pre-instantiated metamodel in __init__ doesn't support this parameter
@@ -171,28 +197,14 @@ class MetaModel_with_CSE_EOS_model(Interpolate_EOS_model):
             mm_output = self.metamodel.construct_eos(NEP_dict, return_extra=True)
 
         # Handle both return_extra=True and return_extra=False cases
-        if return_extra:
-            (
-                n_metamodel_full,
-                p_metamodel_full,
-                _,
-                e_metamodel_full,
-                _,
-                mu_metamodel_full,
-                cs2_metamodel_full,
-                extra,
-            ) = mm_output
-        else:
-            (
-                n_metamodel_full,
-                p_metamodel_full,
-                _,
-                e_metamodel_full,
-                _,
-                mu_metamodel_full,
-                cs2_metamodel_full,
-            ) = mm_output
-            extra = None
+        # Note: MetaModel_EOS_model.construct_eos now returns EOSData
+        n_metamodel_full = mm_output.ns
+        p_metamodel_full = mm_output.ps
+        e_metamodel_full = mm_output.es
+        mu_metamodel_full = mm_output.mu
+        cs2_metamodel_full = mm_output.cs2
+        # Get extra data from the metamodel output (particle fractions, durca, etc.)
+        extra = mm_output.extra_constraints
 
         # Convert units back for interpolation
         n_metamodel_full = n_metamodel_full / utils.fm_inv3_to_geometric
@@ -245,9 +257,25 @@ class MetaModel_with_CSE_EOS_model(Interpolate_EOS_model):
         # No cropping needed - the CSE extension doesn't have particle fraction data
         # but that's fine since the metamodel only generates them up to nbreak.
 
+        # Build EOSData for inference compatibility
+        # Include extra data (particle fractions, durca) from the metamodel if available
+        eos_data = EOSData(
+            ns=ns,
+            ps=ps,
+            hs=hs,
+            es=es,
+            dloge_dlogps=dloge_dlogps,
+            cs2=cs2,
+            mu=mu,
+            extra_constraints=extra,
+        )
+
+        # Return tuple for backward compatibility when return_extra=True
+        # Expected order: (ns, ps, hs, es, dloge_dlogps, mu, cs2, extra)
         if return_extra:
-            return ns, ps, hs, es, dloge_dlogps, mu, cs2, extra
-        return ns, ps, hs, es, dloge_dlogps, mu, cs2
+            return (ns, ps, hs, es, dloge_dlogps, mu, cs2, extra)
+        else:
+            return eos_data
 
     def get_required_parameters(self) -> list[str]:
         r"""
