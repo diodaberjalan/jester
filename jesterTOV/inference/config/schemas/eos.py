@@ -149,8 +149,108 @@ class SpectralEOSConfig(BaseEOSConfig):
         return v
 
 
+class BaseSkyrmeEOSConfig(BaseEOSConfig):
+    r"""Base configuration shared by all Skyrme-based EOS types.
+
+    The Skyrme EOS uses infinite nuclear matter (INM) parameters that are
+    converted to Skyrme force parameters through an inverse problem solver.
+
+    Attributes
+    ----------
+    ndat_skyrme : int
+        Number of density points for Skyrme EOS grid (default: 100)
+    nmax_nsat : float
+        Maximum density in units of saturation density (default: 12.0)
+    nmin_Skyrme_nsat : float
+        Starting density for Skyrme grid as fraction of nsat (default: 0.75)
+    """
+
+    ndat_skyrme: int = 100
+    nmax_nsat: float = 12.0
+    nmin_Skyrme_nsat: float = 0.75
+
+
+class SkyrmeEOSConfig(BaseSkyrmeEOSConfig):
+    r"""Configuration for Skyrme EOS (without CSE).
+
+    The Skyrme EOS implements the energy density functional approach using
+    INM parameters that are solved for Skyrme force parameters.
+
+    Attributes
+    ----------
+    type : Literal["skyrme"]
+        EOS type identifier
+    nb_CSE : int
+        Must be 0 for standard skyrme (no CSE extension)
+    proton_fraction : str | float | None
+        Proton fraction treatment: None (exact with muons), "approx"
+        (without muons), or a fixed float value.
+    """
+
+    type: Literal["skyrme"] = "skyrme"
+    nb_CSE: int = 0
+    proton_fraction: str | float | None = None
+
+    @field_validator("nb_CSE")
+    @classmethod
+    def validate_nb_cse(cls, v: int) -> int:
+        """Validate that nb_CSE is 0 for standard skyrme."""
+        if v != 0:
+            raise ValueError(
+                "nb_CSE must be 0 for type='skyrme'. "
+                "Use type='skyrme_cse' for CSE extension."
+            )
+        return v
+
+
+class SkyrmeCSEEOSConfig(BaseSkyrmeEOSConfig):
+    r"""Configuration for Skyrme EOS with CSE extension.
+
+    Combines the Skyrme approach for low-to-intermediate densities with
+    piecewise constant speed-of-sound extensions at high densities.
+
+    Attributes
+    ----------
+    type : Literal["skyrme_cse"]
+        EOS type identifier
+    nb_CSE : int
+        Number of CSE parameters (must be > 0, typically 4-8)
+    ndat_CSE : int
+        Number of density grid points for the CSE region (default: 100)
+    max_nbreak_nsat : float | None
+        Maximum allowed breaking density in units of nsat (default: None).
+        Should match the upper bound of the nbreak prior.
+    proton_fraction : str | float | None
+        Proton fraction treatment: None (exact with muons), "approx"
+        (without muons), or a fixed float value.
+    """
+
+    type: Literal["skyrme_cse"] = "skyrme_cse"
+    nb_CSE: int = 8
+    ndat_CSE: int = 100
+    max_nbreak_nsat: float | None = None
+    proton_fraction: str | float | None = None
+
+    @field_validator("nb_CSE")
+    @classmethod
+    def validate_nb_cse(cls, v: int) -> int:
+        """Validate that nb_CSE is positive for skyrme_cse."""
+        if v <= 0:
+            raise ValueError(
+                "nb_CSE must be > 0 for type='skyrme_cse'. "
+                "Use type='skyrme' for standard Skyrme without CSE."
+            )
+        return v
+
+
 # Discriminated union of all EOS types
 EOSConfig = Annotated[
-    Union[MetamodelEOSConfig, MetamodelCSEEOSConfig, SpectralEOSConfig],
+    Union[
+        MetamodelEOSConfig,
+        MetamodelCSEEOSConfig,
+        SpectralEOSConfig,
+        SkyrmeEOSConfig,
+        SkyrmeCSEEOSConfig,
+    ],
     Discriminator("type"),
 ]

@@ -10,11 +10,9 @@ from jesterTOV.eos.metamodel.metamodel_CSE import MetaModel_with_CSE_EOS_model
 from jesterTOV.eos.metamodel.metamodel_peakCSE import (
     MetaModel_with_peakCSE_EOS_model,
 )
-from jesterTOV.eos.metamodel.metamodel_only import MetaModel_only
 
 __all__ = [
     "MetaModel_EOS_model",
     "MetaModel_with_CSE_EOS_model",
     "MetaModel_with_peakCSE_EOS_model",
-    "MetaModel_only",
 ]
