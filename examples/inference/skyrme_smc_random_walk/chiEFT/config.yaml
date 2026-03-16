@@ -4,9 +4,10 @@ validate_only: false
 
 eos:
   type: "skyrme_cse"
+  calculate_durca: true
   ndat_skyrme: 100
-  nmax_nsat: 12.0
-  nb_CSE: 4
+  nmax_nsat: 25.0
+  nb_CSE: 8
   crust_name: "DH"
 
 tov:

@@ -61,6 +61,7 @@ eos:
   nmax_nsat: 25.0  # Maximum density (in units of saturation density)
   nmin_MM_nsat: 0.75  # Minimum density for metamodel (in units of n_sat)
   crust_name: "DH"  # Crust model: "DH", "BPS", "DH_fixed", or "SLy"
+  calculate_durca: false  # Whether to compute direct Urca threshold density
   nb_CSE: 0  # Must be 0 for standard metamodel
 ```
 
@@ -84,6 +85,7 @@ eos:
   nmax_nsat: 25.0  # Maximum density (in units of saturation density)
   nmin_MM_nsat: 0.75  # Minimum density for metamodel (in units of n_sat)
   crust_name: "DH"  # Crust model: "DH", "BPS", "DH_fixed", or "SLy"
+  calculate_durca: false  # Whether to compute direct Urca threshold density
 ```
 
 **Requirements:**

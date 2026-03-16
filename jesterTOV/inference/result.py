@@ -91,6 +91,30 @@ class InferenceResult:
             fixed_params if fixed_params is not None else {}
         )
 
+    def _flatten_dict(self, d: Dict[str, Any], prefix: str = "") -> Dict[str, Any]:
+        """Flatten nested dictionary using dot notation.
+
+        Parameters
+        ----------
+        d : Dict[str, Any]
+            Input dictionary (may contain nested dicts)
+        prefix : str
+            Prefix for keys (used recursively)
+
+        Returns
+        -------
+        Dict[str, Any]
+            Flattened dictionary with dot-separated keys
+        """
+        items: Dict[str, Any] = {}
+        for k, v in d.items():
+            new_key = f"{prefix}.{k}" if prefix else k
+            if isinstance(v, dict):
+                items.update(self._flatten_dict(v, new_key))
+            else:
+                items[new_key] = v
+        return items
+
     @classmethod
     def from_sampler(
         cls,
@@ -288,23 +312,40 @@ class InferenceResult:
             fixed_params=fixed_params,
         )
 
-    def add_derived_eos(self, eos_dict: Dict[str, Array]) -> None:
+    def add_derived_eos(self, eos_dict: Dict[str, Any]) -> None:
         """Add derived EOS quantities to posterior.
 
         This should be called after TOV solver generates M-R-Lambda curves.
 
         Parameters
         ----------
-        eos_dict : Dict[str, Array]
+        eos_dict : Dict[str, Any]
             Dictionary of derived EOS quantities (masses_EOS, radii_EOS, Lambdas_EOS, n, p, e, cs2, etc.)
+            May contain nested dicts, which will be flattened with dot notation.
         """
         logger.info("Adding derived EOS quantities to posterior")
 
-        # Convert JAX arrays to NumPy and add to posterior
-        for key, value in eos_dict.items():
-            self.posterior[key] = np.array(value)
+        # Flatten nested dicts and convert JAX arrays to NumPy
+        flattened = self._flatten_dict(eos_dict)
+        for key, value in flattened.items():
+            # Convert JAX arrays to NumPy, leave other types unchanged
+            # Try to detect JAX arrays
+            try:
+                import jax
+                if isinstance(value, jax.Array):
+                    self.posterior[key] = np.array(value)
+                    continue
+            except ImportError:
+                pass
+            # Fallback for other array-like types
+            if isinstance(value, np.ndarray):
+                self.posterior[key] = value
+            elif hasattr(value, "__array__"):
+                self.posterior[key] = np.array(value)
+            else:
+                self.posterior[key] = value
 
-        logger.info(f"Added {len(eos_dict)} derived EOS quantities")
+        logger.info(f"Added {len(flattened)} derived EOS quantities (after flattening)")
 
     def add_eos_from_transform(
         self,
@@ -421,9 +462,9 @@ class InferenceResult:
 
         # Add transformed outputs to posterior (EOS quantities only, not input parameters)
         # Filter out input parameters from transformed_samples to avoid overwriting full posterior arrays
-        eos_keys = {"masses_EOS", "radii_EOS", "Lambdas_EOS", "n", "p", "e", "cs2"}
-        eos_only = {k: v for k, v in transformed_samples.items() if k in eos_keys}
-        self.add_derived_eos(eos_only)
+        input_keys = set(chosen_samples.keys())
+        derived = {k: v for k, v in transformed_samples.items() if k not in input_keys}
+        self.add_derived_eos(derived)
 
         # If we selected a subset, filter log_prob and sampler fields to match
         if idx is not None:
@@ -488,7 +529,10 @@ class InferenceResult:
             posterior_grp = f.create_group("posterior")
 
             # Separate parameters from derived quantities
-            # Heuristic: derived quantities have specific names
+            # Use metadata parameter_names to identify parameters
+            param_names = set(self.metadata.get("parameter_names", []))
+            sampler_specific_keys = {"weights", "ess", "logL", "logL_birth"}
+            # Keep original derived_keys for backward compatibility
             derived_keys = {
                 "masses_EOS",
                 "radii_EOS",
@@ -498,7 +542,6 @@ class InferenceResult:
                 "e",
                 "cs2",
             }
-            sampler_specific_keys = {"weights", "ess", "logL", "logL_birth"}
 
             # Get sampler-specific data if present (use .get() to avoid mutating self.posterior)
             sampler_specific_data = self.posterior.get("_sampler_specific", {})
@@ -510,6 +553,10 @@ class InferenceResult:
             derived_grp = posterior_grp.create_group("derived_eos")
             sampler_grp = posterior_grp.create_group("sampler_specific")
 
+            # Determine all parameter names (sampled + fixed)
+            fixed_params = self.metadata.get("fixed_params", {})
+            all_param_names = param_names.union(fixed_params.keys())
+
             # Distribute datasets to appropriate groups
             for key, value in self.posterior.items():
                 if key == "_sampler_specific":
@@ -518,13 +565,13 @@ class InferenceResult:
                 elif key == "log_prob":
                     # log_prob goes directly in /posterior
                     posterior_grp.create_dataset("log_prob", data=value)
-                elif key in derived_keys:
-                    derived_grp.create_dataset(key, data=value)
                 elif key in sampler_specific_keys:
                     sampler_grp.create_dataset(key, data=value)
-                else:
-                    # Assume it's a parameter
+                elif key in all_param_names:
                     params_grp.create_dataset(key, data=value)
+                else:
+                    # Everything else is derived EOS quantity
+                    derived_grp.create_dataset(key, data=value)
 
             # Add sampler-specific data from the dict
             for key, value in sampler_specific_data.items():  # type: ignore[union-attr]

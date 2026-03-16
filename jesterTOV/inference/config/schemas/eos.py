@@ -41,6 +41,7 @@ class BaseMetamodelEOSConfig(BaseEOSConfig):
     ndat_metamodel: int = 100
     nmax_nsat: float = 25.0
     nmin_MM_nsat: float = 0.75
+    calculate_durca: bool = False
 
 
 class MetamodelEOSConfig(BaseMetamodelEOSConfig):
@@ -163,11 +164,14 @@ class BaseSkyrmeEOSConfig(BaseEOSConfig):
         Maximum density in units of saturation density (default: 12.0)
     nmin_Skyrme_nsat : float
         Starting density for Skyrme grid as fraction of nsat (default: 0.75)
+    calculate_durca : bool
+        If True, compute Direct Urca threshold density (default: False)
     """
 
     ndat_skyrme: int = 100
     nmax_nsat: float = 12.0
     nmin_Skyrme_nsat: float = 0.75
+    calculate_durca: bool = False
 
 
 class SkyrmeEOSConfig(BaseSkyrmeEOSConfig):

@@ -3,6 +3,7 @@ dry_run: false
 validate_only: false
 eos:
   type: metamodel_cse
+  calculate_durca: true
   ndat_metamodel: 100
   nmax_nsat: 25.0
   nb_CSE: 8

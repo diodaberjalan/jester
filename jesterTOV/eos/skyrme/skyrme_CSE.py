@@ -209,9 +209,7 @@ class Skyrme_with_CSE_EOS_model(Interpolate_EOS_model):
             cs2_skyrme_full,
             extra,
         ) = skyrme_output
-        if not return_extra:
-            extra = None
-
+        
         # Convert units back for interpolation
         n_skyrme_full = n_skyrme_full / utils.fm_inv3_to_geometric
         p_skyrme_full = p_skyrme_full / utils.MeV_fm_inv3_to_geometric

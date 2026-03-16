@@ -174,6 +174,11 @@ def extract_eos_configs() -> list[dict[str, Any]]:
                     "inline_comment": 'Crust model: "DH", "BPS", "DH_fixed", or "SLy"',
                 },
                 {
+                    "name": "calculate_durca",
+                    "example": "false",
+                    "inline_comment": "Whether to compute direct Urca threshold density",
+                },
+                {
                     "name": "nb_CSE",
                     "example": "0",
                     "inline_comment": "Must be 0 for standard metamodel",
@@ -218,6 +223,11 @@ def extract_eos_configs() -> list[dict[str, Any]]:
                     "name": "crust_name",
                     "example": '"DH"',
                     "inline_comment": 'Crust model: "DH", "BPS", "DH_fixed", or "SLy"',
+                },
+                {
+                    "name": "calculate_durca",
+                    "example": "false",
+                    "inline_comment": "Whether to compute direct Urca threshold density",
                 },
             ],
             "requirements": ["`nb_CSE` must be > 0 for this parametrization"],

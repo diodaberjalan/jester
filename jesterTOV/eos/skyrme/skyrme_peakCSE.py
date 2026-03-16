@@ -227,7 +227,7 @@ class Skyrme_with_peakCSE_EOS_model(Interpolate_EOS_model):
             dloge_dlogps=dloge_dlogps,
             mu=mu,
             cs2=cs2,
-            extra_constraints=None,
+            extra_constraints=extra,
         )
         cs2_CSE = cs2_extension_function(n_CSE)
 
@@ -259,7 +259,7 @@ class Skyrme_with_peakCSE_EOS_model(Interpolate_EOS_model):
             dloge_dlogps=dloge_dlogps,
             mu=mu,
             cs2=cs2,
-            extra_constraints=None,
+            extra_constraints=extra,
         )
 
     def offset_calc(self, nbreak, cs2_break, peakCSE_dict):

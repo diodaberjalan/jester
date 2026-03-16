@@ -4,10 +4,12 @@ import jax
 import jax.numpy as jnp
 import optimistix as optx
 from jaxtyping import Array, Float, Int
+from typing import Union
 
 from jesterTOV import utils
 from jesterTOV.eos.base import Interpolate_EOS_model
 from jesterTOV.eos.crust import Crust
+from jesterTOV.tov.data_classes import EOSData
 from jesterTOV.logging_config import get_logger
 
 logger = get_logger("jester")
@@ -121,7 +123,7 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
             self.with_muon = True
         else:
             # Default to exact calculation with muons
-            self.proton_fraction = lambda x, y: self.compute_proton_fraction_exact(x, y)
+            self.proton_fraction = lambda x, y: self.compute_proton_fraction_exact(y)
             self.with_muon = True
 
         # DURCA calculation configuration
@@ -522,12 +524,13 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
 
         return proton_fraction
 
+    # type: ignore[override]
     def construct_eos(
         self,
-        INM_dict: dict,
+        params: dict,
         return_extra: bool = False,
         calculate_durca: bool | None = None,
-    ) -> tuple:
+    ) -> Union[EOSData, tuple]:
         r"""
         Construct the complete equation of state from INM parameters.
 
@@ -535,7 +538,7 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
         Skyrme core, ensuring thermodynamic consistency and causality.
 
         Args:
-            INM_dict (dict): Infinite nuclear matter parameters including:
+            params (dict): Infinite nuclear matter parameters including:
                 - **t2**: Input parameter
                 - **t4**: Input parameter
                 - **x0**, **x1**, **x4**: Exchange parameter inputs
@@ -547,16 +550,26 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
                 - **meffs**, **meffv**: Effective masses (scalar, vector)
                 - **Kinf**: Incompressibility
                 - **eNMhd**: Energy density at high density
+            return_extra (bool, optional): If True, returns a tuple with extra Skyrme-specific quantities.
+                If False (default), returns an EOSData object for inference compatibility.
+            calculate_durca (bool | None, optional): If True, calculate the Direct Urca threshold density.
+                If None, uses the instance default.
 
         Returns:
-            tuple: Complete EOS data containing:
-                - **ns**: Number densities [geometric units]
-                - **ps**: Pressures [geometric units]
-                - **hs**: Specific enthalpies [geometric units]
-                - **es**: Energy densities [geometric units]
-                - **dloge_dlogps**: Logarithmic derivative
-                - **mu**: Chemical potential [geometric units]
-                - **cs2**: Speed of sound squared
+            Union[EOSData, tuple]:
+                - If ``return_extra=False`` (default): :class:`EOSData` object for inference compatibility.
+                - If ``return_extra=True``: tuple ``(ns, ps, hs, es, dloge_dlogps, mu, cs2, extra)``
+                  where ``extra`` is a dict with Skyrme-specific quantities.
+
+                The EOSData contains:
+                    - **ns**: Number densities [geometric units]
+                    - **ps**: Pressures [geometric units]
+                    - **hs**: Specific enthalpies [geometric units]
+                    - **es**: Energy densities [geometric units]
+                    - **dloge_dlogps**: Logarithmic derivative
+                    - **mu**: Chemical potential [geometric units]
+                    - **cs2**: Speed of sound squared
+                    - **extra_constraints**: dict with proton fraction, lepton fractions, and DURCA threshold
         """
 
         # Handle calculate_durca: use instance default if not provided
@@ -566,17 +579,17 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
         self.durca_density = {"ye": jnp.nan, "ym": jnp.nan, "nb_durca": jnp.nan}
 
         # Solve for Skyrme parameters
-        self.t_skyrme, self.x_skyrme = self.solve_skyrme_system(INM_dict)
+        self.t_skyrme, self.x_skyrme = self.solve_skyrme_system(params)
 
         # Store density dependence parameters
-        self.alph = INM_dict.get('alph', 0.2)
-        self.beta = INM_dict.get('beta', 0.0833)
-        self.gamma = INM_dict.get('gamma', 0.25)
+        self.alph = params.get('alph', 0.2)
+        self.beta = params.get('beta', 0.0833)
+        self.gamma = params.get('gamma', 0.25)
         self.t2p = 1.0  # Standard value
 
         # Compute proton fraction
         if self.with_muon:
-            proton_fraction, e_fraction, muon_fraction = self.proton_fraction(
+            proton_fraction, e_fraction, muon_fraction = self.proton_fraction(  # type: ignore[misc]
                 None, self.n_Skyrme
             )
         else:
@@ -585,7 +598,7 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
             muon_fraction = None
 
         # Calculate energy density for each density point
-        n_n = self.n_Skyrme * (1 - proton_fraction)
+        n_n = self.n_Skyrme * (1 - proton_fraction)  # type: ignore[operator]
         n_p = self.n_Skyrme * proton_fraction
 
         e_Skyrme = self.eDenSky(n_n, n_p)
@@ -651,9 +664,15 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
 
         e_total = e_Skyrme + e_lepton + rest_mass_energy_density
 
+        # Ensure proton_fraction is array for compute_cs2
+        if jnp.ndim(proton_fraction) == 0:  # type: ignore[arg-type]
+            proton_fraction_arr = jnp.full_like(self.n_Skyrme, proton_fraction)  # type: ignore[arg-type]
+        else:
+            proton_fraction_arr = proton_fraction
+
         # Compute cs2 including lepton contributions
-        cs2_Skyrme = self.compute_cs2(
-            self.n_Skyrme, p_total, e_total, proton_fraction, e_final_arr
+        cs2_Skyrme = self.compute_cs2(  # type: ignore[arg-type]
+            self.n_Skyrme, p_total, e_total, proton_fraction_arr, e_final_arr
         )
 
         # Spline for speed of sound for the connection region
@@ -678,22 +697,32 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
 
         ns, ps, hs, es, dloge_dlogps = self.interpolate_eos(n, p, e)
 
+        # Build extra dict for backward compatibility when return_extra=True
+        extra = {
+            "n_Skyrme_orig": self.n_Skyrme,
+            "proton_fraction": proton_fraction,
+        }
+        if self.with_muon and e_fraction is not None:
+            extra["e_fraction"] = e_fraction
+            extra["muon_fraction"] = muon_fraction
+        if self.calculate_durca:
+            extra["durca_density"] = self.durca_density
+
+        # Return tuple for backward compatibility when return_extra=True
         if return_extra:
-            extra = {
-                "n_Skyrme_orig": self.n_Skyrme,
-                "proton_fraction": proton_fraction,
-            }
-            if self.with_muon and e_fraction is not None:
-                extra["e_fraction"] = e_fraction
-                extra["muon_fraction"] = muon_fraction
-            if self.calculate_durca:
-                extra["durca_density"] = self.durca_density
-
-            output = ns, ps, hs, es, dloge_dlogps, mu, cs2, extra
+            return (ns, ps, hs, es, dloge_dlogps, mu, cs2, extra)
         else:
-            output = ns, ps, hs, es, dloge_dlogps, mu, cs2
-
-        return output
+            # Return EOSData for inference compatibility
+            return EOSData(
+                ns=ns,
+                ps=ps,
+                hs=hs,
+                es=es,
+                dloge_dlogps=dloge_dlogps,
+                cs2=cs2,
+                mu=mu,
+                extra_constraints=extra,
+            )
 
     def compute_cs2(
         self,

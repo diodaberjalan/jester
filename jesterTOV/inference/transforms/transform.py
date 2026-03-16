@@ -241,6 +241,7 @@ class JesterTransform(NtoMTransform):
                 nmax_nsat=config.nmax_nsat,
                 ndat=config.ndat_metamodel,
                 crust_name=config.crust_name,
+                calculate_durca=config.calculate_durca,
             )
 
         elif isinstance(config, MetamodelCSEEOSConfig):
@@ -253,6 +254,7 @@ class JesterTransform(NtoMTransform):
                 ndat_CSE=config.ndat_CSE,
                 nb_CSE=config.nb_CSE,
                 crust_name=config.crust_name,
+                calculate_durca=config.calculate_durca,
             )
 
         elif isinstance(config, SpectralEOSConfig):
@@ -271,6 +273,7 @@ class JesterTransform(NtoMTransform):
                 ndat=config.ndat_skyrme,
                 crust_name=config.crust_name,
                 proton_fraction=config.proton_fraction,
+                calculate_durca=config.calculate_durca,
             )
 
         elif isinstance(config, SkyrmeCSEEOSConfig):
@@ -284,6 +287,7 @@ class JesterTransform(NtoMTransform):
                 nb_CSE=config.nb_CSE,
                 crust_name=config.crust_name,
                 proton_fraction=config.proton_fraction,
+                calculate_durca=config.calculate_durca,
             )
 
         else:
