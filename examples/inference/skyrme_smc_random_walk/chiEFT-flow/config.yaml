@@ -1,0 +1,47 @@
+seed: 42
+dry_run: false
+validate_only: false
+
+eos:
+  type: "skyrme_cse"
+  calculate_durca: true
+  ndat_skyrme: 100
+  nmax_nsat: 25.0
+  nb_CSE: 8
+  crust_name: "DH"
+
+tov:
+  type: "gr"
+  min_nsat_TOV: 0.75
+  ndat_TOV: 100
+  nb_masses: 100
+
+prior:
+  specification_file: "prior.prior"
+
+likelihoods:
+  - type: "constraints_eos"
+    enabled: true
+  - type: "chieft"
+    enabled: true
+    # ChiEFT data paths are absolute or relative to run location
+    low_filename: "../../../../jesterTOV/inference/data/chiEFT/2402.04172/low.dat"
+    high_filename: "../../../../jesterTOV/inference/data/chiEFT/2402.04172/high.dat"
+    nb_n: 100
+
+sampler:
+  type: flowmc
+  n_chains: 512          
+  n_loop_training: 60    
+  n_loop_production: 40  
+  n_local_steps: 10      
+  n_global_steps: 100     
+  n_epochs: 20           
+  learning_rate: 0.001
+  output_dir: ./outdir/
+
+postprocessing:
+  enabled: true
+  make_cornerplot: false
+  make_massradius: true
+  make_pressuredensity: true

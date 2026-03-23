@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Callable
 
 import jax.numpy as jnp
+import jax.nn as nn
 import numpy as np
 from jaxtyping import Array, Float
 
@@ -206,17 +207,23 @@ class ChiEFTLikelihood(LikelihoodBase):
         # Evaluate the sampled p(n) at the given n
         sample_p = jnp.interp(this_n_array, n, p)
 
-        # Compute f
+        # Compute f (log)
+        # def f(sample_p, low_p, high_p):
+        #     beta = 6 / (high_p - low_p)
+        #     return_value = (
+        #         -beta * (sample_p - high_p) * jnp.heaviside(sample_p - high_p, 0)
+        #         + -beta * (low_p - sample_p) * jnp.heaviside(low_p - sample_p, 0)
+        #     )
+        #     return return_value
+
         def f(sample_p, low_p, high_p):
-            beta = 6 / (high_p - low_p)
-            return_value = (
-                -beta * (sample_p - high_p) * jnp.heaviside(sample_p - high_p, 0)
-                + -beta * (low_p - sample_p) * jnp.heaviside(low_p - sample_p, 0)
-                + 1
-                * jnp.heaviside(sample_p - low_p, 0)
-                * jnp.heaviside(high_p - sample_p, 0)
-            )
-            return return_value
+            delta = jnp.maximum(high_p - low_p, 1e-7)
+            beta = 6.0 / delta
+            
+            penalty_high = nn.relu(sample_p - high_p)
+            penalty_low = nn.relu(low_p - sample_p)
+            
+            return -beta * (penalty_high + penalty_low)
 
         f_array = f(sample_p, low_p, high_p)
         prefactor = 1 / (nbreak - 0.75 * 0.16)
