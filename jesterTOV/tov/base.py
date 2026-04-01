@@ -113,10 +113,10 @@ class TOVSolverBase(ABC):
             & jnp.all(eos_data.cs2 <= 1)
         )
 
-        # # Poison the EOS data with NaNs if unphysical
-        # eos_data = jax.tree_util.tree_map(
-        #     lambda x: jnp.where(is_valid_eos, x, jnp.nan), eos_data
-        # )
+        # Poison the EOS data with NaNs if unphysical
+        eos_data = jax.tree_util.tree_map(
+            lambda x: jnp.where(is_valid_eos, x, jnp.nan), eos_data
+        )
 
         # Create central pressure grid
         pc_min = self._get_pc_min(eos_data, min_nsat)
