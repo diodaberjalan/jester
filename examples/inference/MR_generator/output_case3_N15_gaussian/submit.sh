@@ -1,9 +1,4 @@
-import os
-
-def generate_submit_script(folder_name):
-    """Generates a SLURM submit.sh script inside the specified folder."""
-    
-    submit_script_content = f"""#!/bin/bash -l
+#!/bin/bash -l
 #Set job requirements
 #SBATCH -N 1
 #SBATCH -n 1
@@ -13,7 +8,7 @@ def generate_submit_script(folder_name):
 #SBATCH --cpus-per-gpu=1
 #SBATCH --mem-per-gpu=40G
 #SBATCH --output="./outdir/log_smc_rw.out"
-#SBATCH --job-name="{folder_name}"
+#SBATCH --job-name="output_case3_N15_gaussian"
 
 now=$(date)
 echo "$now"
@@ -28,11 +23,7 @@ source activate jester-MG
 nvidia-smi --query-gpu=name --format=csv,noheader
 
 echo "=========================================="
-echo "=== Running jester inference ({folder_name}) ==="
+echo "=== Running jester inference (output_case3_N15_gaussian) ==="
 echo "=========================================="
 
 uv run run_jester_inference config.yml
-"""
-    submit_path = os.path.join(folder_name, "submit.sh")
-    with open(submit_path, "w") as f:
-        f.write(submit_script_content)
