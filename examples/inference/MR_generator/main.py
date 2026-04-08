@@ -31,6 +31,7 @@ def main():
 
     # *** EXPERIMENT TOGGLES ***
     run_multi_cases = True
+    gravity_theory = "GR"  # Options: "GR" or "ST"
 
     if run_multi_cases:
         experiment_modes = [
@@ -57,7 +58,7 @@ def main():
         if not toggle_str: toggle_str = "_gaussian"
 
         print(f"\n========================================")
-        print(f"Starting execution for mode: {toggle_str}")
+        print(f"Starting execution for mode: {toggle_str} | Theory: {gravity_theory}")
         print(f"========================================")
 
         nsat = 0.16
@@ -78,7 +79,8 @@ def main():
             input_data_str = get_case_data(case_name)
             input_dict = parse_input_data(input_data_str)
             
-            beta_ST = input_dict.pop("beta_ST")
+            # Pop beta_ST with a default to avoid KeyError if processing pure GR cases
+            beta_ST = input_dict.pop("beta_ST", 0.0) 
             input_dict["n_CSE_8_u"] = nmax_nsat
 
             eos = MetaModel_with_CSE_EOS_model(
@@ -91,21 +93,31 @@ def main():
                 es=eos_output.es, dloge_dlogps=eos_output.dloge_dlogps, cs2=eos_output.cs2,
             )
 
-            tov_params = {"beta_ST": beta_ST, "phi_c": phi_c, "phi_inf_tgt": phi_inf_tgt}
-            
-            # Calculate ST
-            family = st_solver.construct_family(eos_data, ndat=200, min_nsat=0.1, tov_params=tov_params)
-            radii_km = family.radii
-            masses_solar = family.masses
-            mask = (radii_km < r_max) & (radii_km > 5) & (masses_solar > 1.2) & jnp.isfinite(family.extra["lambda_S"])
+            # Construct Family Based on Selected Gravity Theory
+            if gravity_theory == "ST":
+                tov_params = {"beta_ST": beta_ST, "phi_c": phi_c, "phi_inf_tgt": phi_inf_tgt}
+                family = st_solver.construct_family(eos_data, ndat=200, min_nsat=0.1, tov_params=tov_params)
+                radii_km = family.radii
+                masses_solar = family.masses
+                mask = (radii_km < r_max) & (radii_km > 5) & (masses_solar > 1.2) & jnp.isfinite(family.extra.get("lambda_S", 1.0))
+                label_key = beta_ST
+            elif gravity_theory == "GR":
+                tov_params = {}
+                family = gr_solver.construct_family(eos_data, ndat=300, min_nsat=0.5, tov_params=tov_params)
+                radii_km = family.radii
+                masses_solar = family.masses
+                mask = (radii_km < r_max) & (radii_km > 5) & (masses_solar > 0.5)
+                label_key = "GR"
+            else:
+                raise ValueError("gravity_theory must be 'GR' or 'ST'")
             
             data = {
                 "masses": masses_solar[mask],
                 "radii": radii_km[mask]
             }
-            results = {beta_ST: data}
+            results = {label_key: data}
 
-            # Calculate GR for reference plotting
+            # Calculate GR for reference plotting regardless of chosen theory
             gr_family = gr_solver.construct_family(eos_data, ndat=300, min_nsat=0.5, tov_params={})
             gr_mask = (gr_family.radii < r_max) & (gr_family.radii > 5) & (gr_family.masses > 0.5)
             gr_masses = gr_family.masses[gr_mask]
@@ -149,11 +161,7 @@ def main():
                 sample_masses_max = jnp.where(is_gap, mass_if_gap, mass_if_overlap)
                 
                 r1 = jnp.interp(sample_masses_max, mass_seg1, rad_seg1)
-                
-                # === REVERTED TO ORIGINAL ===
-                # Reason: User confirmed mass_seg2 is NOT decreasing. jnp.interp will function correctly.
                 r2 = jnp.interp(sample_masses_max, mass_seg2, rad_seg2)
-                # ============================
                 
                 valid1 = (sample_masses_max >= m1_min) & (sample_masses_max <= m1_max)
                 valid2 = (sample_masses_max >= m2_min) & (sample_masses_max <= m2_max)
@@ -166,14 +174,7 @@ def main():
                 forced_m2 = jax.random.uniform(subkey_force, shape=(), minval=m2_min, maxval=m2_max)
                 forced_r2 = jnp.interp(forced_m2, mass_seg2, rad_seg2)
                 
-                # === FIX: INCLUSIVE FORCED INDEX ===
-                # Reason: Forcing the point at N_max - 1 (index 24) meant subsets N=5, 10, 15, 20 completely 
-                # excluded it. Setting it to index 0 ensures all subsets from N=5 upwards contain the forced point.
-                # OLD CODE:
-                # overwrite_mask = (jnp.arange(N_max) == (N_max - 1)) & missed_seg2
-                # NEW CODE:
                 overwrite_mask = (jnp.arange(N_max) == 0) & missed_seg2
-                # ===================================
                 
                 sample_masses_max = jnp.where(overwrite_mask, forced_m2, sample_masses_max)
                 sample_radii_max = jnp.where(overwrite_mask, forced_r2, sample_radii_max)
@@ -196,11 +197,6 @@ def main():
             sample_radii_noise_max = sample_radii_max + noise_r_max
             sample_masses_noise_max = sample_masses_max + noise_m_max
             
-            # === FIX: PRE-GENERATE PDF ERRORS (STATISTICAL NOISE) ===
-            # Reason: We must generate the PDF error percentages OUTSIDE the N_obj loop. 
-            # If generated inside, the random numbers change per subset, violating the requirement 
-            # that "it has to be consistent for each 5 ndat in 10 ndat".
-            # NEW CODE:
             key, key_pdf_m, key_pdf_r, key_corr, key_skew = random.split(key, 5)
             
             pdf_frac_m_max = jax.random.uniform(key_pdf_m, shape=(N_max,), minval=0.02, maxval=0.05)
@@ -215,53 +211,35 @@ def main():
                 skew_vals_max = jax.random.uniform(key_skew, shape=(N_max, 2), minval=-3.0, maxval=3.0)
             else:
                 skew_vals_max = jnp.zeros((N_max, 2))
-            # ========================================================
 
             for N_obj in N_obj_list:
                 print(f"  Generating setup for N_obj = {N_obj}")
 
-                folder_name = f"output_{case_name}_N{N_obj}{toggle_str}"
+                # Append theory to folder name to prevent overwrite collisions
+                folder_name = f"output_{case_name}_{gravity_theory}_N{N_obj}{toggle_str}"
                 os.makedirs(folder_name, exist_ok=True)
                 
-                # *** INJECT FILES INTO FOLDER ***
                 generate_submit_script(folder_name)
-                generate_prior_file(folder_name, sys, corr, skew)
+                generate_prior_file(folder_name, sys, corr, skew, gravity_theory)
                 
-                # *** SLICE PRE-GENERATED DATA ***
                 sample_masses = sample_masses_max[:N_obj]
                 sample_radii = sample_radii_max[:N_obj]
                 sample_masses_noise = sample_masses_noise_max[:N_obj]
                 sample_radii_noise = sample_radii_noise_max[:N_obj]
                 
-                # === FIX: SLICE PRE-GENERATED PDF PROPERTIES ===
-                # Reason: Ensure the exact same fractional errors, skews, and correlations 
-                # are used for the first N_obj items across all subset iterations.
-                # NEW CODE:
                 pdf_frac_m = pdf_frac_m_max[:N_obj]
                 pdf_frac_r = pdf_frac_r_max[:N_obj]
                 corr_vals = corr_vals_max[:N_obj]
                 skew_vals = skew_vals_max[:N_obj]
-                # ===============================================
                 
-                # *** EXECUTE CASE-LEVEL PLOTS ***
                 plotting.plot_eos(eos_output.ns, eos_output.ps, eos_output.es, eos_output.cs2, input_dict, nsat, folder_name)
                 plotting.plot_mr_comparison(results, gr_radii, gr_masses, folder_name)
 
                 dat_filename = os.path.join(folder_name, "reference_mr.dat")
                 np.savetxt(dat_filename, np.column_stack((data["masses"], data["radii"])), header="Mass Radius")
 
-                # *** EXECUTE SPLIT PLOT ***
                 plotting.plot_splits(rad_seg1, mass_seg1, rad_seg2, mass_seg2, folder_name)
-
-                # *** EXECUTE NOISE PLOT ***
                 plotting.plot_noise_addition(data["radii"], data["masses"], sample_radii, sample_masses, sample_radii_noise, sample_masses_noise, folder_name)
-
-                # === FIX: REMOVE NP.RANDOM.SEED(42) FROM INNER LOOP ===
-                # Reason: It resets the global numpy state every subset pass, which caused 
-                # the previous inconsistencies when using np.random.uniform inside the loop.
-                # OLD CODE:
-                # np.random.seed(42)
-                # ======================================================
                 
                 table_data = []
                 flows = []
@@ -270,30 +248,14 @@ def main():
                     m = float(sample_masses_noise[i])
                     r = float(sample_radii_noise[i])
                     
-                    # === FIX: APPLY SLICED PDF PROPERTIES ===
-                    # Reason: By referencing the pre-generated JAX arrays, point [i] is statistically 
-                    # identical whether it is evaluated in the N=5 subset or the N=25 subset.
-                    # OLD CODE:
-                    # std_m_val = np.random.uniform(0.02, 0.05) * m 
-                    # std_r_val = np.random.uniform(0.02, 0.05) * r
-                    # if not corr: corr_val = 0.0
-                    # else: corr_val = np.random.uniform(0, 1) 
-                    # NEW CODE:
                     std_m_val = float(pdf_frac_m[i]) * m
                     std_r_val = float(pdf_frac_r[i]) * r
                     corr_val = float(corr_vals[i])
-                    # ========================================
                     
                     cov_val = corr_val * std_m_val * std_r_val
                     cov_m = jnp.array([[std_m_val**2, cov_val], [cov_val, std_r_val**2]])
                     
-                    # === FIX: APPLY SLICED SKEW PROPERTIES ===
-                    # OLD CODE:
-                    # if not skew: skew_v = jnp.array([0.0, 0.0])
-                    # else: skew_v = jnp.array([np.random.uniform(-3.0, 3.0), np.random.uniform(-3.0, 3.0)])
-                    # NEW CODE:
                     skew_v = jnp.array([skew_vals[i, 0], skew_vals[i, 1]])
-                    # =========================================
                     
                     flows.append(SkewedCorrelatedFlow(m, r, cov_m, skew_v))
                     
@@ -315,12 +277,10 @@ def main():
                 csv_path = os.path.join(folder_name, csv_filename)
                 df_params.to_csv(csv_path, index=False)
                 
-                generate_yaml_config(folder_name, csv_filename)
+                generate_yaml_config(folder_name, csv_filename, gravity_theory)
 
-                # *** EXECUTE CONTOUR PLOT ***
                 plotting.plot_mock_flows_contours(flows, sample_masses_noise, sample_radii_noise, data["radii"], data["masses"], case_name, N_obj, folder_name)
 
-                # *** EVALUATE AND PLOT FINAL LIKELIHOOD ***
                 mock_likelihood = MockMRLikelihood(csv_path, N_masses_evaluation=300)
                 m_eos = jnp.array(data["masses"])
                 r_eos = jnp.array(data["radii"])
@@ -328,32 +288,30 @@ def main():
                 ll_val = mock_likelihood.evaluate(params_eval)
                 print(f"    -> Total Normalized Log-Likelihood: {ll_val:.4f}")
                 
-                # Store the log-likelihood for the final aggregation plot
                 ll_results[case_name].append(ll_val)
                 
                 plotting.plot_final_mock_likelihood(mock_likelihood, m_eos, r_eos, folder_name)
 
-                print(f"    -> Saved all plots and configs successfully to {folder_name}/ (⁠✿⁠^⁠‿⁠^⁠)")
+                print(f"    -> Saved all plots and configs successfully to {folder_name}/ (✿^‿^)")
 
-        # *** EXECUTE GLOBAL LIKELIHOOD VS N_OBJ PLOT ***
-        print(f"\nGenerating final Log-Likelihood vs N_obj plot for {toggle_str}...")
+        print(f"\nGenerating final Log-Likelihood vs N_obj plot for {gravity_theory} {toggle_str}...")
         plt.figure(figsize=(10, 6))
         
         for case_name, ll_vals in ll_results.items():
             plt.plot(N_obj_list, ll_vals, marker='o', linestyle='-', linewidth=2, markersize=8, label=case_name)
             
-        plt.title(f"Log-Likelihood Across Subset Sizes ({toggle_str.strip('_')})")
+        plt.title(f"Log-Likelihood Across Subset Sizes ({gravity_theory} | {toggle_str.strip('_')})")
         plt.xlabel("N_obj")
         plt.ylabel("Normalized Log-Likelihood")
         plt.xticks(N_obj_list)
         plt.grid(True, linestyle=':', alpha=0.7)
         plt.legend(title="MR Cases")
         
-        final_plot_filename = f"likelihood_vs_N_obj{toggle_str}.png"
+        final_plot_filename = f"likelihood_vs_N_obj_{gravity_theory}{toggle_str}.png"
         plt.tight_layout()
         plt.savefig(final_plot_filename, dpi=96)
         plt.close()
-        print(f"Saved {final_plot_filename} to current working directory. (⁠✿⁠^⁠‿⁠^⁠)")
+        print(f"Saved {final_plot_filename} to current working directory. (✿^‿^)")
 
 if __name__ == "__main__":
     main()
