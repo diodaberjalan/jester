@@ -131,18 +131,19 @@ n_CSE_7_u       | 3.11815e-01
 nbreak          | 2.91341e-01
 phi_c           | 9.99995e-01
 phi_inf_tgt     | 9.99938e-04
-"""
+""",
     }
-    
+
     if case_name not in cases:
         raise ValueError(f"Unknown case_name: {case_name}. Cek lagi dong kak! (⁠✿⁠ ⁠♡⁠‿⁠♡⁠)")
-    
+
     return cases[case_name]
+
 
 def parse_input_data(input_data_str: str) -> dict:
     input_dict = {}
-    for line in input_data_str.strip().split('\n'):
-        if '|' in line:
-            key, val = line.split('|')
+    for line in input_data_str.strip().split("\n"):
+        if "|" in line:
+            key, val = line.split("|")
             input_dict[key.strip()] = float(val.strip())
     return input_dict

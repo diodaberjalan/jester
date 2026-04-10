@@ -6,6 +6,7 @@ from jax.scipy.stats import norm
 from jax.scipy.special import logsumexp
 from jesterTOV import utils
 
+
 class SkewedCorrelatedFlow:
     def __init__(self, m_center, r_center, cov_matrix, skewness):
         self.center = jnp.array([m_center, r_center])
@@ -15,7 +16,7 @@ class SkewedCorrelatedFlow:
         self.log_det_cov = jnp.linalg.slogdet(self.cov)[1]
 
     def log_prob(self, mr_point):
-        diff = mr_point - self.center 
+        diff = mr_point - self.center
         quad_form = jnp.sum(diff @ self.inv_cov * diff, axis=-1)
         log_norm = -0.5 * (self.log_det_cov + quad_form + 2 * jnp.log(2 * jnp.pi))
         omega = jnp.sqrt(jnp.diag(self.cov))
@@ -24,19 +25,28 @@ class SkewedCorrelatedFlow:
         log_skew = jnp.log(2.0) + jax.scipy.stats.norm.logcdf(skew_arg)
         return log_norm + log_skew
 
+
 class LikelihoodBase:
     pass
 
+
 class MockMRLikelihood(LikelihoodBase):
-    def __init__(self, csv_file: str, penalty_value: float = -1e10, N_masses_evaluation: int = 200) -> None:
+    def __init__(
+        self,
+        csv_file: str,
+        penalty_value: float = -1e10,
+        N_masses_evaluation: int = 200,
+    ) -> None:
         super().__init__()
         self.penalty_value = penalty_value
         self.N_masses_evaluation = N_masses_evaluation
 
         df = pd.read_csv(csv_file)
         self.K = len(df)
-        
-        self.centers = jnp.array(df[["Mass_Center_Noise", "Radius_Center_Noise"]].values)
+
+        self.centers = jnp.array(
+            df[["Mass_Center_Noise", "Radius_Center_Noise"]].values
+        )
         std_m = jnp.array(df["Std_Mass"].values)
         std_r = jnp.array(df["Std_Radius"].values)
         cov_val = jnp.array(df["Covariance"].values)
@@ -85,9 +95,11 @@ class MockMRLikelihood(LikelihoodBase):
             r_grid = jnp.interp(m_grid, m_eos, r_eos)
             mr_points = jnp.stack([m_grid, r_grid], axis=-1)
             diff = mr_points[None, :, :] - self.centers[:, None, :]
-            diff_transformed = jnp.einsum('kij,knj->kni', self.inv_covs, diff)
+            diff_transformed = jnp.einsum("kij,knj->kni", self.inv_covs, diff)
             quad_form = jnp.sum(diff * diff_transformed, axis=-1)
-            log_norm = -0.5 * (self.log_det_covs[:, None] + quad_form + 2 * jnp.log(2 * jnp.pi))
+            log_norm = -0.5 * (
+                self.log_det_covs[:, None] + quad_form + 2 * jnp.log(2 * jnp.pi)
+            )
             skew_arg = jnp.sum(self.alpha_primes[:, None, :] * diff, axis=-1)
             log_skew = jnp.log(2.0) + norm.logcdf(skew_arg)
             log_prob = log_norm + log_skew

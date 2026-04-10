@@ -1,10 +1,13 @@
 import os
 
-def generate_yaml_config(folder_path: str, csv_filename: str, gravity_theory: str = "ST"):
-    
+
+def generate_yaml_config(
+    folder_path: str, csv_filename: str, gravity_theory: str = "ST"
+):
+
     tov_type = "scalar_tensor" if gravity_theory == "ST" else "gr"
     tidal_str = "\n  calculate_tidal: True" if gravity_theory == "ST" else ""
-    
+
     config_content = f"""seed: 44
 dry_run: false
 validate_only: false

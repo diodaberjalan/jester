@@ -215,12 +215,16 @@ class TOVSolverBase(ABC):
 
         # Process the grid and all extra fields in a single consolidated pass
         if extra is not None:
-            pcs_lim, masses_lim, radii_lim, lambdas_lim, extra_processed = utils.limit_by_MTOV_and_interpolate(
-                pcs, masses_solar, radii_km, lambdas, ndat, extra=extra
+            pcs_lim, masses_lim, radii_lim, lambdas_lim, extra_processed = (
+                utils.limit_by_MTOV_and_interpolate(
+                    pcs, masses_solar, radii_km, lambdas, ndat, extra=extra
+                )
             )
         else:
-            pcs_lim, masses_lim, radii_lim, lambdas_lim = utils.limit_by_MTOV_and_interpolate(
-                pcs, masses_solar, radii_km, lambdas, ndat
+            pcs_lim, masses_lim, radii_lim, lambdas_lim = (
+                utils.limit_by_MTOV_and_interpolate(
+                    pcs, masses_solar, radii_km, lambdas, ndat
+                )
             )
             extra_processed = None
 

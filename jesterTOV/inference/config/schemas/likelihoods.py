@@ -813,8 +813,11 @@ class MockMRLikelihoodConfig(BaseLikelihoodConfig):
     def validate_csv_file(cls, v: str) -> str:
         """Warn if CSV file does not exist (may be resolved later)."""
         from pathlib import Path
+
         if not Path(v).exists():
-            logger.warning(f"CSV file '{v}' does not exist (may be resolved at runtime)")
+            logger.warning(
+                f"CSV file '{v}' does not exist (may be resolved at runtime)"
+            )
         return v
 
 

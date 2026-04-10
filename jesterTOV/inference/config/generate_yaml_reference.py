@@ -693,7 +693,8 @@ def extract_likelihoods() -> list[dict[str, Any]]:
                     "description_text": "Evaluates deterministic skewed correlated posteriors for mock pulsars. Loads data from a CSV file with per-pulsar covariance matrices and skewness parameters. Integrates probability density over a uniform mass grid and normalizes by the number of mock pulsars.",
                 },
             ],
-        },        {
+        },
+        {
             "title": "Nuclear Theory Constraints",
             "description": "Constrain the low-density EOS using nuclear theory calculations and laboratory measurements.",
             "likelihoods": [

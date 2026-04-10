@@ -1,8 +1,9 @@
 import os
 
+
 def generate_submit_script(folder_name):
     """Generates a SLURM submit.sh script inside the specified folder."""
-    
+
     submit_script_content = f"""#!/bin/bash -l
 #Set job requirements
 #SBATCH -N 1

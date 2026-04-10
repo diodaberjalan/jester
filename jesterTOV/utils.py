@@ -8,6 +8,7 @@ calculations needed for TOV equation solving.
 **Units:** The module defines conversion factors between different unit
 systems commonly used in neutron star physics.
 """
+
 from typing import Optional
 import jax
 from jax import vmap
@@ -415,15 +416,16 @@ def limit_by_MTOV(
 #     lambdas_new = cubic_hermite_interp(log_pc_query, log_pc, l)
 #     ms_new = cubic_hermite_interp(log_pc_query, log_pc, m)
 
+
 #     return jnp.exp(log_pc_query), ms_new, rs_new, lambdas_new
-@partial(jax.jit, static_argnames=['ndat'])
+@partial(jax.jit, static_argnames=["ndat"])
 def limit_by_MTOV_and_interpolate(
-    pc: jnp.ndarray, 
-    m: jnp.ndarray, 
-    r: jnp.ndarray, 
-    l: jnp.ndarray, 
+    pc: jnp.ndarray,
+    m: jnp.ndarray,
+    r: jnp.ndarray,
+    l: jnp.ndarray,
     ndat: int,
-    extra: Optional[dict[str, jnp.ndarray]] = None
+    extra: Optional[dict[str, jnp.ndarray]] = None,
 ):
     r"""
     Refactor stellar solution filter and interpolation for stable branch.
@@ -496,6 +498,8 @@ def limit_by_MTOV_and_interpolate(
         return jnp.exp(log_pc_query), ms_new, rs_new, lambdas_new, extra_new
 
     return jnp.exp(log_pc_query), ms_new, rs_new, lambdas_new
+
+
 ###################
 ### SPLINES etc ###
 ###################
@@ -582,6 +586,7 @@ def cubic_spline(xq: Float[Array, "n"], xp: Float[Array, "n"], fp: Float[Array, 
 #     t2 = t * t
 #     t3 = t2 * t
 
+
 #     # Basis functions
 #     h00 = 2 * t3 - 3 * t2 + 1
 #     h10 = t3 - 2 * t2 + t
@@ -597,13 +602,13 @@ def cubic_hermite_interp(
 
     central_diff_numer = fp[2:] - fp[:-2]
     central_diff_denom = xp[2:] - xp[:-2]
-    forward_m0 = (fp[1] - fp[0]) / (xp[1] - xp[0]) 
-    interior_m1_m = central_diff_numer / central_diff_denom 
-    backward_m_end = (fp[-1] - fp[-2]) / (xp[-1] - xp[-2]) 
+    forward_m0 = (fp[1] - fp[0]) / (xp[1] - xp[0])
+    interior_m1_m = central_diff_numer / central_diff_denom
+    backward_m_end = (fp[-1] - fp[-2]) / (xp[-1] - xp[-2])
 
     dydx = jnp.concatenate(
         (
-            forward_m0[None], 
+            forward_m0[None],
             interior_m1_m,
             backward_m_end[None],
         )
@@ -618,7 +623,7 @@ def cubic_hermite_interp(
     m1 = dydx[indices + 1]
 
     dx = x1 - x0
-    t = (x - x0) / dx 
+    t = (x - x0) / dx
 
     t2 = t * t
     t3 = t2 * t
@@ -628,6 +633,7 @@ def cubic_hermite_interp(
     h01 = -2 * t3 + 3 * t2
     h11 = t3 - t2
     return h00 * y0 + h10 * dx * m0 + h01 * y1 + h11 * dx * m1
+
 
 def sigmoid(x: Array) -> Array:
     r"""
@@ -749,12 +755,14 @@ def locate_lowest_non_causal_point(cs2: Float[Array, "n"]) -> Int[Array, ""]:
 
 def get_MR_split_index(x, y, jump_threshold=20.0):
     N = x.shape[0]
-    ds2 = jnp.diff(x)**2 + jnp.diff(y)**2
-    
+    ds2 = jnp.diff(x) ** 2 + jnp.diff(y) ** 2
+
     # Find the largest gap
     max_idx = jnp.argmax(ds2)
     median_ds2 = jnp.median(ds2) + 1e-12
-    is_jump = ((ds2[max_idx] > (jump_threshold * median_ds2)) & (max_idx > 0)).astype(jnp.int32)
+    is_jump = ((ds2[max_idx] > (jump_threshold * median_ds2)) & (max_idx > 0)).astype(
+        jnp.int32
+    )
 
     split_idx = is_jump * (max_idx + 1) + (1 - is_jump) * N
     return split_idx
