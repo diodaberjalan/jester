@@ -8,7 +8,7 @@ def generate_submit_script(folder_name):
 #SBATCH -N 1
 #SBATCH -n 1
 #SBATCH --partition gpu
-#SBATCH -t 1-00:00:00
+#SBATCH -t 2-00:00:00
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-gpu=1
 #SBATCH --mem-per-gpu=40G

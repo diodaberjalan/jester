@@ -3,7 +3,7 @@ import os
 def generate_yaml_config(folder_path: str, csv_filename: str, gravity_theory: str = "ST"):
     
     tov_type = "scalar_tensor" if gravity_theory == "ST" else "gr"
-    tidal_str = "\n  calculate_tidal: false" if gravity_theory == "ST" else ""
+    tidal_str = "\n  calculate_tidal: True" if gravity_theory == "ST" else ""
     
     config_content = f"""seed: 44
 dry_run: false
@@ -31,11 +31,11 @@ likelihoods:
   N_masses_evaluation: 200
 sampler:
   type: smc-rw
-  n_particles: 1000
+  n_particles: 3000
   n_mcmc_steps: 10
   target_ess: 0.9
   random_walk_sigma: 0.1
-  n_eos_samples: 1000
+  n_eos_samples: 3000
   output_dir: ./outdir/
 postprocessing:
   enabled: true
