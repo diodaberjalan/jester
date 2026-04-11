@@ -206,27 +206,35 @@ class TOVSolverBase(ABC):
         Returns:
             FamilyData: Processed family curves in physical units
         """
+        # Calculate compactness
         compactness = masses / radii
 
+        # Convert to physical units
         masses_solar = masses / utils.solar_mass_in_meter
         radii_km = radii / 1e3
 
+        # Calculate tidal deformability
         lambdas = 2.0 / 3.0 * k2s * jnp.power(compactness, -5.0)
 
-        # Process the grid and all extra fields in a single consolidated pass
+        # Limit masses to be below MTOV and interpolate onto a uniform log(pc) grid on stable segments
+        pcs_lim, masses_lim, radii_lim, lambdas_lim = (
+            utils.limit_by_MTOV_and_interpolate(
+                pcs, masses_solar, radii_km, lambdas, ndat
+            )
+        )
+        # @TODO: merge extras interpolation in a single call in above.
+        # Process extra solver-specific fields if provided
+        extra_processed: Optional[dict[str, Float[Array, "ndat"]]] = None
         if extra is not None:
-            pcs_lim, masses_lim, radii_lim, lambdas_lim, extra_processed = (
-                utils.limit_by_MTOV_and_interpolate(
-                    pcs, masses_solar, radii_km, lambdas, ndat, extra=extra
-                )
+            # Use tree_map to efficiently apply interpolation to all extra fields at once
+            extra_processed = jax.tree_util.tree_map(
+                lambda val: utils.limit_by_MTOV_and_interpolate(
+                    pcs, masses_solar, radii_km, val, ndat
+                )[
+                    3
+                ],  # Take only the interpolated fourth element (the 'lambda'-like array)
+                extra,
             )
-        else:
-            pcs_lim, masses_lim, radii_lim, lambdas_lim = (
-                utils.limit_by_MTOV_and_interpolate(
-                    pcs, masses_solar, radii_km, lambdas, ndat
-                )
-            )
-            extra_processed = None
 
         return FamilyData(
             log10pcs=jnp.log10(pcs_lim),
