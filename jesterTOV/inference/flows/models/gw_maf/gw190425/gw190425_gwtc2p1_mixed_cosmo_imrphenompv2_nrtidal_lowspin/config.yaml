@@ -1,6 +1,5 @@
-# Configuration for training normalizing flow on GWTC-2.1 GW190425 posterior
-# Source: Zenodo record 6513631, mixed_cosmo variant, C01:IMRPhenomXP_NRTidalv2
-posterior_file: ../../../../../data/gw190425/gw190425_gwtc2p1_mixed_cosmo_imrphenomxp_nrtidalv2_posterior.npz
+# Configuration for training normalizing flow
+posterior_file: ../../../../../data/gw190425/gw190425_gwtc2p1_mixed_cosmo_imrphenompv2_nrtidal_lowspin_posterior.npz
 output_dir: .
 
 # Parameter selection
