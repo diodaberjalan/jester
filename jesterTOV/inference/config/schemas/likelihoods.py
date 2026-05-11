@@ -800,6 +800,41 @@ class ZeroLikelihoodConfig(BaseLikelihoodConfig):
     )
 
 
+class MockMRLikelihoodConfig(BaseLikelihoodConfig):
+    """Mock M-R likelihood configuration for mock-data studies.
+
+    Evaluates a bivariate skew-normal likelihood against pre-computed
+    mock observations stored in a CSV file.
+
+    Examples
+    --------
+    .. code-block:: yaml
+
+        - type: "mock_mr"
+          enabled: true
+          csv_file: "./mock_data.csv"
+          penalty_value: -1e10
+          N_masses_evaluation: 200
+    """
+
+    type: Literal["mock_mr"] = Field(
+        default="mock_mr", description="Likelihood type identifier"
+    )
+
+    csv_file: str = Field(description="Path to CSV file with mock M-R observations")
+
+    penalty_value: float = Field(
+        default=-1e10,
+        description="Log-likelihood penalty for invalid configurations",
+    )
+
+    N_masses_evaluation: int = Field(
+        default=200,
+        gt=0,
+        description="Number of mass grid points for numerical integration",
+    )
+
+
 # Discriminated union of all likelihood types
 LikelihoodConfig = Annotated[
     Union[
@@ -816,6 +851,7 @@ LikelihoodConfig = Annotated[
         DeprecatedConstraintsLikelihoodConfig,
         REXLikelihoodConfig,
         ZeroLikelihoodConfig,
+        MockMRLikelihoodConfig,
     ],
     Discriminator("type"),
 ]

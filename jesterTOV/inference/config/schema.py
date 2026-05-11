@@ -37,6 +37,7 @@ from .schemas.eos import (
 from .schemas.tov import (
     BaseTOVConfig,
     GRTOVConfig,
+    ScalarTensorTOVConfig,
     AnisotropyTOVConfig,
     TOVConfig,
 )
@@ -58,6 +59,7 @@ from .schemas.likelihoods import (
     DeprecatedConstraintsLikelihoodConfig,
     REXLikelihoodConfig,
     ZeroLikelihoodConfig,
+    MockMRLikelihoodConfig,
     LikelihoodConfig,
 )
 
@@ -236,6 +238,7 @@ __all__ = [
     # TOV
     "BaseTOVConfig",
     "GRTOVConfig",
+    "ScalarTensorTOVConfig",
     "AnisotropyTOVConfig",
     "TOVConfig",
     # Likelihoods
@@ -254,6 +257,7 @@ __all__ = [
     "DeprecatedConstraintsLikelihoodConfig",
     "REXLikelihoodConfig",
     "ZeroLikelihoodConfig",
+    "MockMRLikelihoodConfig",
     "LikelihoodConfig",
     # Samplers
     "BaseSamplerConfig",

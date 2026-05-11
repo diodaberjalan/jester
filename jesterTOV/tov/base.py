@@ -6,6 +6,7 @@ whether for General Relativity, modified gravity, or scalar-tensor theories.
 """
 
 from abc import ABC, abstractmethod
+from typing import Optional
 import jax
 import jax.numpy as jnp
 from jaxtyping import Float, Array
@@ -133,8 +134,13 @@ class TOVSolverBase(ABC):
         radii: Float[Array, "ndat"] = solutions.R  # type: ignore[assignment]
         k2s: Float[Array, "ndat"] = solutions.k2  # type: ignore[assignment]
 
+        # Extract optional extra fields from solver-specific quantities
+        extra_fields: Optional[dict[str, Float[Array, "ndat"]]] = solutions.extra  # type: ignore[assignment]
+
         # Convert to physical units and compute tidal deformability
-        return self._create_family_data(pcs, masses, radii, k2s, ndat)
+        return self._create_family_data(
+            pcs, masses, radii, k2s, ndat, extra=extra_fields
+        )
 
     def _get_pc_min(self, eos_data: EOSData, min_nsat: float) -> Float[Array, ""]:
         """
@@ -183,6 +189,7 @@ class TOVSolverBase(ABC):
         radii: Float[Array, "ndat"],
         k2s: Float[Array, "ndat"],
         ndat: int,
+        extra: Optional[dict[str, Float[Array, "ndat"]]] = None,
     ) -> FamilyData:
         """
         Shared post-processing: unit conversion, compactness limits, interpolation.
@@ -193,6 +200,8 @@ class TOVSolverBase(ABC):
             radii: Radii [geometric units]
             k2s: Love numbers [dimensionless]
             ndat: Number of points for output grid
+            extra: Optional dictionary of solver-specific quantities
+                  (e.g., from ScalarTensorTOVSolver)
 
         Returns:
             FamilyData: Processed family curves in physical units
@@ -207,21 +216,30 @@ class TOVSolverBase(ABC):
         # Calculate tidal deformability
         lambdas = 2.0 / 3.0 * k2s * jnp.power(compactness, -5.0)
 
-        # Limit masses to be below MTOV (removes unstable branch)
-        pcs_lim, masses_lim, radii_lim, lambdas_lim = utils.limit_by_MTOV(
-            pcs, masses_solar, radii_km, lambdas
+        # Limit masses to be below MTOV and interpolate onto a uniform log(pc) grid
+        # on stable segments, handling multi-segment phase transitions
+        pcs_lim, masses_lim, radii_lim, lambdas_lim = (
+            utils.limit_by_MTOV_and_interpolate(
+                pcs, masses_solar, radii_km, lambdas, ndat
+            )
         )
 
-        # Get a mass grid and interpolate, since we might have some duplicate points
-        mass_grid = jnp.linspace(jnp.min(masses_lim), jnp.max(masses_lim), ndat)
-        radii_interp = jnp.interp(mass_grid, masses_lim, radii_lim)
-        lambdas_interp = jnp.interp(mass_grid, masses_lim, lambdas_lim)
-        pcs_interp = jnp.interp(mass_grid, masses_lim, pcs_lim)
-        log10pcs = jnp.log10(pcs_interp)
+        # Process extra solver-specific fields if provided
+        extra_processed: Optional[dict[str, Float[Array, "ndat"]]] = None
+        if extra is not None:
+            extra_processed = jax.tree_util.tree_map(
+                lambda val: utils.limit_by_MTOV_and_interpolate(
+                    pcs, masses_solar, radii_km, val, ndat
+                )[
+                    3
+                ],  # Take only the interpolated fourth element
+                extra,
+            )
 
         return FamilyData(
-            log10pcs=log10pcs,
-            masses=mass_grid,
-            radii=radii_interp,
-            lambdas=lambdas_interp,
+            log10pcs=jnp.log10(pcs_lim),
+            masses=masses_lim,
+            radii=radii_lim,
+            lambdas=lambdas_lim,
+            extra=extra_processed,
         )

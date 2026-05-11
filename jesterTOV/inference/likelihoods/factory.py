@@ -18,10 +18,11 @@ from ..config.schema import (
     DeprecatedConstraintsLikelihoodConfig,
     REXLikelihoodConfig,
     ZeroLikelihoodConfig,
+    MockMRLikelihoodConfig,
 )
 from .combined import CombinedLikelihood, ZeroLikelihood
 from .gw import GWLikelihood, GWLikelihoodResampled
-from .nicer import NICERLikelihood, NICERKDELikelihood
+from .nicer import NICERLikelihood, NICERKDELikelihood, MockMRLikelihood
 from .radio import RadioTimingLikelihood
 from .chieft import ChiEFTLikelihood
 from .constraints import (
@@ -194,6 +195,13 @@ def create_likelihood(
 
         case ZeroLikelihoodConfig():
             return ZeroLikelihood()
+
+        case MockMRLikelihoodConfig():
+            return MockMRLikelihood(
+                csv_file=config.csv_file,
+                penalty_value=config.penalty_value,
+                N_masses_evaluation=config.N_masses_evaluation,
+            )
 
         case _:
             raise ValueError(f"Unknown likelihood type: {config.type}")

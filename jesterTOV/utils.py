@@ -402,6 +402,183 @@ def calculate_rest_mass_density(e: Float[Array, "n"], p: Float[Array, "n"]):
     return solution.ys
 
 
+def cubic_hermite_interp(
+    x: Float[Array, "n"], xp: Float[Array, "m"], fp: Float[Array, "m"]
+) -> Float[Array, "n"]:
+    """
+    Cubic Hermite spline interpolation with optimized derivative calculation for JAX.
+
+    Args:
+        x: Points to evaluate at (Float[Array, "n"])
+        xp: Known x coordinates (must be sorted) (Float[Array, "m"])
+        fp: Known y coordinates (Float[Array, "m"])
+
+    Returns:
+        Interpolated values at x (Float[Array, "n"])
+    """
+    # generate indices of intervals
+    indices = jnp.searchsorted(xp, x) - 1
+    indices = jnp.clip(indices, 0, len(xp) - 2)
+
+    # Finite difference
+    central_diff_numer = fp[2:] - fp[:-2]
+    central_diff_denom = xp[2:] - xp[:-2]
+    forward_m0 = (fp[1] - fp[0]) / (xp[1] - xp[0])  # for starting index
+    interior_m1_m = central_diff_numer / central_diff_denom  # for middle indices
+    backward_m_end = (fp[-1] - fp[-2]) / (xp[-1] - xp[-2])  # for last index
+
+    # Concatenate them to form the final array of derivatives dydx (length m)
+    dydx = jnp.concatenate(
+        (
+            forward_m0[None],  # [None] adds a dimension to match the others
+            interior_m1_m,
+            backward_m_end[None],
+        )
+    )
+
+    # Get interval endpoints and derivatives using indices
+    x0 = xp[indices]
+    x1 = xp[indices + 1]
+    y0 = fp[indices]
+    y1 = fp[indices + 1]
+
+    m0 = dydx[indices]
+    m1 = dydx[indices + 1]
+
+    # Interpolation
+    dx = x1 - x0
+    t = (x - x0) / dx  # Normalize to [0, 1] within the interval
+
+    # power functions
+    t2 = t * t
+    t3 = t2 * t
+
+    # Basis functions
+    h00 = 2 * t3 - 3 * t2 + 1
+    h10 = t3 - 2 * t2 + t
+    h01 = -2 * t3 + 3 * t2
+    h11 = t3 - t2
+    return h00 * y0 + h10 * dx * m0 + h01 * y1 + h11 * dx * m1
+
+
+def get_MR_split_index(x, y, jump_threshold=20.0):
+    N = x.shape[0]
+    ds2 = jnp.diff(x) ** 2 + jnp.diff(y) ** 2
+
+    # Find the largest gap
+    max_idx = jnp.argmax(ds2)
+    median_ds2 = jnp.median(ds2) + 1e-12
+    is_jump = (
+        (ds2[max_idx] > (jump_threshold * median_ds2)) & (max_idx > 0)
+    ).astype(jnp.int32)
+
+    split_idx = is_jump * (max_idx + 1) + (1 - is_jump) * N
+    return split_idx
+
+
+def limit_by_MTOV_and_interpolate(
+    pc, m, r, l, ndat
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    r"""
+    Refactor stellar solution filter and interpolation for stable branch.
+
+    This function processes neutron star mass-radius-tidal deformability data by:
+    1. Sorting by central pressure to ensure monotonicity
+    2. Identifying stable segments where :math:`\frac{dM}{dp_c} > 0`
+    3. Distributing interpolation points uniformly across the logarithmic central pressure
+       range of all stable segments combined
+    4. Performing cubic Hermite spline interpolation on the stable branch
+
+    Args:
+        pc: Central pressure array [geometric units]
+        m: Gravitational mass array [:math:`M_\odot`]
+        r: Radius array [km]
+        l: Tidal deformability array
+        ndat: Number of points to interpolate across stable segments
+
+    Returns:
+        tuple: Interpolated arrays (pc_new, m_new, r_new, l_new)
+    """
+    # Sort all sequence by pc (Ensure monotonicity of Pc)
+    sort_idx = jnp.argsort(pc)
+    pc = pc[sort_idx]
+    m = m[sort_idx]
+    r = r[sort_idx]
+    l = l[sort_idx]
+
+    # Transform to log space for interpolation grid
+    log_pc = jnp.log(pc)
+
+    # Identify stable segments via gradient. Since pc is increasing, sign(dM/dPc) == sign(dM)
+    dm = m[1:] - m[:-1]
+    is_stable = dm > 0  # Mask where the curve is stable (mass is increasing)
+
+    # Find the edges of stable regions.
+    # We pad the boolean mask with False on both sides to detect
+    # transitions at the very beginning or end of the array.
+    mask_padded = jnp.insert(is_stable, 0, False)
+    mask_padded = jnp.insert(mask_padded, len(mask_padded), False)
+
+    # Calculate diff to find transitions:
+    # +1 indicates False -> True (Start of a stable segment)
+    # -1 indicates True -> False (End of a stable segment)
+    diff = mask_padded[1:].astype(int) - mask_padded[:-1].astype(int)
+
+    # Extract indices. Assuming a max of 4 segments for static functions (for jax compatibility).
+    starts = jnp.where(diff == 1, size=4, fill_value=len(m) - 1)[0]
+    ends = jnp.where(diff == -1, size=4, fill_value=len(m) - 1)[0]
+
+    # Extract segment bounds
+    s1_start, s1_end = starts[0], ends[0]
+    s2_start, s2_end = starts[1], ends[1]
+    s3_start, s3_end = starts[2], ends[2]
+    s4_start, s4_end = starts[3], ends[3]
+
+    # Calculate lengths in log(pc) space for each stable segment
+    len1 = log_pc[s1_end] - log_pc[s1_start]
+    len2 = log_pc[s2_end] - log_pc[s2_start]
+    len3 = log_pc[s3_end] - log_pc[s3_start]
+    len4 = log_pc[s4_end] - log_pc[s4_start]
+
+    total_len = len1 + len2 + len3 + len4
+
+    # Distribute ndat equidistantly in accumulated log space
+    s_grid = jnp.linspace(0, total_len, ndat)
+
+    # Cumulative lengths boundaries
+    cum_l1 = len1
+    cum_l2 = len1 + len2
+    cum_l3 = len1 + len2 + len3
+
+    # Generate the query grid by mapping 's' back to specific segments
+    mask1 = s_grid <= cum_l1
+    val1 = log_pc[s1_start] + s_grid
+
+    mask2 = (s_grid > cum_l1) & (s_grid <= cum_l2)
+    val2 = log_pc[s2_start] + (s_grid - cum_l1)
+
+    mask3 = (s_grid > cum_l2) & (s_grid <= cum_l3)
+    val3 = log_pc[s3_start] + (s_grid - cum_l2)
+
+    mask4 = s_grid > cum_l3
+    val4 = log_pc[s4_start] + (s_grid - cum_l3)
+
+    # Combine
+    log_pc_query = jnp.where(
+        mask1, val1, jnp.where(mask2, val2, jnp.where(mask3, val3, val4))
+    )
+
+    # Fallback for completely unstable EOS (total_len = 0)
+    log_pc_query = jnp.where(total_len > 0, log_pc_query, log_pc[0])
+
+    # Interpolate at query points using cubic Hermite spline
+    rs_new = cubic_hermite_interp(log_pc_query, log_pc, r)
+    lambdas_new = cubic_hermite_interp(log_pc_query, log_pc, l)
+    ms_new = cubic_hermite_interp(log_pc_query, log_pc, m)
+
+    return jnp.exp(log_pc_query), ms_new, rs_new, lambdas_new
+
+
 def locate_lowest_non_causal_point(cs2: Float[Array, "n"]) -> Int[Array, ""]:
     r"""
     Find the first point where the equation of state becomes non-causal.
