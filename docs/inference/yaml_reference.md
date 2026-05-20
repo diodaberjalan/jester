@@ -431,6 +431,98 @@ Constrain neutron star masses using radio pulsar timing measurements. For the ph
 
 ::::
 
+### Maximum mass bounds (joint lower + upper)
+
+Constrain the maximum TOV mass using both lower bounds from heavy pulsars and an upper bound from multimessenger events (e.g., GW170817). This is a joint constraint based on Dietrich et al. (2020) that uses CDF products. The Python class is {class}`~jesterTOV.inference.likelihoods.radio.MaxMassBoundsLikelihood`.
+
+::::{dropdown} **Maximum Mass Bounds Likelihood**
+
+```yaml
+- type: "max_mass_bounds"
+  enabled: true
+  name: "Joint_Mass_Bounds"     # Identifier (optional, default: "Joint_Mass_Bounds")
+  lower_mean: [1.908, 2.01]     # Pulsar masses [Msun]: J1614-2230, J0348+4032
+  lower_std: [0.016, 0.04]      # Pulsar mass uncertainties (1-sigma, solar masses)
+  upper_mean: 2.16              # Upper bound mean mass from GW170817 (solar masses)
+  upper_std: 0.17               # Upper bound uncertainty (1-sigma, solar masses)
+  penalty_value: -1e5           # Penalty for M_TOV <= m_min (optional, default: -1e5)
+```
+
+**Field Details:**
+
+- **`name`** (`str`, default: `"Joint_Mass_Bounds"`) - Identifier for this likelihood constraint
+- **`lower_mean`** (`list[float]`) - Mean masses of the lower bound observations (pulsar timing) in solar masses. Each entry corresponds to a precisely measured heavy pulsar.
+- **`lower_std`** (`list[float]`) - 1-sigma uncertainties of the lower bound observations in solar masses. Must have the same length as `lower_mean` and all values must be positive.
+- **`upper_mean`** (`float`) - Mean mass of the upper bound observation (e.g., GW170817 remnant) in solar masses.
+- **`upper_std`** (`float`) - 1-sigma uncertainty of the upper bound observation in solar masses.
+- **`penalty_value`** (`float`, default: `-1e5`) - Log-likelihood penalty for invalid TOV solutions (M_TOV <= m_min).
+
+::::
+
+### Mock data likelihoods
+
+Likelihoods for mock-data and simulation-based studies. These evaluate
+against synthetic observations stored in CSV files.
+
+#### Mock M-R likelihood
+
+::::{dropdown} **Mock M-R likelihood**
+
+```yaml
+- type: "mock_mr"
+  enabled: true
+  csv_file: "./mock_mr_data.csv"
+  penalty_value: -1e10
+  N_masses_evaluation: 200
+```
+
+Evaluates a bivariate skew-normal likelihood against mock (mass, radius)
+observations. Each CSV row is an independent mass-radius measurement.
+
+**Field Details:**
+
+- **`csv_file`** (`str`, required) - Path to CSV file with mock M-R observations.
+  Expected columns: `Mass_Center_Noise`, `Radius_Center_Noise`, `Std_Mass`,
+  `Std_Radius`, `Covariance`, `Skew_Mass`, `Skew_Radius`.
+- **`penalty_value`** (`float`, default: `-1e10`) - Log-likelihood penalty for
+  invalid configurations.
+- **`N_masses_evaluation`** (`int`, default: `200`) - Number of mass grid points
+  for numerical integration over the mass dimension.
+
+See {class}`~jesterTOV.inference.likelihoods.nicer.MockMRLikelihood` for the API reference.
+
+::::
+
+#### Mock mass-Lambda likelihood
+
+::::{dropdown} **Mock mass-Lambda likelihood**
+
+```yaml
+- type: "mock_lambda"
+  enabled: true
+  csv_file: "./mock_lambda_data.csv"
+  penalty_value: -1e10
+  N_masses_evaluation: 200
+```
+
+Evaluates a bivariate skew-normal likelihood against mock (mass, Lambda)
+observations, where Lambda is the dimensionless tidal deformability.
+Each CSV row is an independent mass-Lambda measurement (no m1/m2 pairing).
+
+**Field Details:**
+
+- **`csv_file`** (`str`, required) - Path to CSV file with mock mass-Lambda
+  observations. Expected columns: `Mass_Center_Noise`, `Lambda_Center_Noise`,
+  `Std_Mass`, `Std_Lambda`, `Covariance`, `Skew_Mass`, `Skew_Lambda`.
+- **`penalty_value`** (`float`, default: `-1e10`) - Log-likelihood penalty for
+  invalid configurations.
+- **`N_masses_evaluation`** (`int`, default: `200`) - Number of mass grid points
+  for numerical integration over the mass dimension.
+
+See {class}`~jesterTOV.inference.likelihoods.gw.MockLambdaLikelihood` for the API reference.
+
+::::
+
 ### Nuclear theory constraints
 
 Constrain the low-density EOS using nuclear theory calculations and laboratory measurements.

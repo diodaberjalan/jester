@@ -1,9 +1,9 @@
 """Modular likelihood components for jesterTOV inference"""
 
 from .combined import CombinedLikelihood, ZeroLikelihood
-from .gw import GWLikelihood, GWLikelihoodResampled
+from .gw import GWLikelihood, GWLikelihoodResampled, MockLambdaLikelihood
 from .nicer import NICERLikelihood, NICERKDELikelihood, MockMRLikelihood
-from .radio import RadioTimingLikelihood
+from .radio import RadioTimingLikelihood, MaxMassBoundsLikelihood
 from .chieft import ChiEFTLikelihood
 from .rex import REXLikelihood
 from .constraints import (
@@ -21,7 +21,9 @@ __all__ = [
     "NICERLikelihood",
     "NICERKDELikelihood",
     "MockMRLikelihood",
+    "MockLambdaLikelihood",
     "RadioTimingLikelihood",
+    "MaxMassBoundsLikelihood",
     "ChiEFTLikelihood",
     "REXLikelihood",
     "ConstraintEOSLikelihood",

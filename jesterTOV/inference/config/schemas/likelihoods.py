@@ -835,6 +835,136 @@ class MockMRLikelihoodConfig(BaseLikelihoodConfig):
     )
 
 
+class MockLambdaLikelihoodConfig(BaseLikelihoodConfig):
+    """Mock Lambda (tidal deformability) likelihood configuration for mock-data studies.
+
+    Evaluates a bivariate skew-normal likelihood against mock mass-Lambda
+    observations stored in a CSV file. Each row is an independent
+    (mass, Lambda) observation.
+
+    Examples
+    --------
+    .. code-block:: yaml
+
+        - type: "mock_lambda"
+          enabled: true
+          csv_file: "./mock_lambda_data.csv"
+          penalty_value: -1e10
+          N_masses_evaluation: 200
+    """
+
+    type: Literal["mock_lambda"] = Field(
+        default="mock_lambda", description="Likelihood type identifier"
+    )
+
+    csv_file: str = Field(
+        description="Path to CSV file with mock mass-Lambda observations"
+    )
+
+    penalty_value: float = Field(
+        default=-1e10,
+        description="Log-likelihood penalty for invalid configurations",
+    )
+
+    N_masses_evaluation: int = Field(
+        default=200,
+        gt=0,
+        description="Number of mass grid points for numerical integration",
+    )
+
+
+class MaxMassBoundsLikelihoodConfig(BaseLikelihoodConfig):
+    """Maximum NS mass likelihood combining lower and upper bounds.
+
+    Constrains the maximum TOV mass using joint information from:
+    - Lower bound: precisely measured heavy pulsar masses (e.g., PSR J1614-2230,
+      PSR J0348+4032) providing a lower limit on M_TOV.
+    - Upper bound: maximum NS mass estimates from multimessenger events
+      (e.g., GW170817 remnant constraint).
+
+    The likelihood is the product of CDFs for lower bounds and (1 - CDF)
+    for the upper bound, as derived in Dietrich et al. (2020).
+
+    Examples
+    --------
+    .. code-block:: yaml
+
+        - type: "max_mass_bounds"
+          enabled: true
+          name: "Joint_Mass_Bounds"
+          lower_mean: [1.908, 2.01]
+          lower_std: [0.016, 0.04]
+          upper_mean: 2.16
+          upper_std: 0.17
+          penalty_value: -1e5
+    """
+
+    type: Literal["max_mass_bounds"] = Field(
+        default="max_mass_bounds",
+        description="Likelihood type identifier",
+    )
+
+    name: str = Field(
+        default="Joint_Mass_Bounds",
+        description="Identifier for this likelihood constraint",
+    )
+
+    lower_mean: list[float] = Field(
+        description=(
+            "Mean masses of the lower bound observations (pulsar timing) in "
+            "solar masses. Each entry corresponds to a precisely measured "
+            "heavy pulsar constraining the minimum M_TOV."
+        ),
+        min_length=1,
+    )
+
+    lower_std: list[float] = Field(
+        description=(
+            "1-sigma uncertainties of the lower bound observations in solar masses. "
+            "Must have the same length as lower_mean."
+        ),
+        min_length=1,
+    )
+
+    upper_mean: float = Field(
+        description=(
+            "Mean mass of the upper bound observation (e.g., GW170817 remnant "
+            "maximum mass estimate) in solar masses."
+        )
+    )
+
+    upper_std: float = Field(
+        description=(
+            "1-sigma uncertainty of the upper bound observation in solar masses."
+        ),
+        gt=0.0,
+    )
+
+    penalty_value: float = Field(
+        default=-1e5,
+        description="Log-likelihood penalty for invalid TOV solutions (M_TOV <= m_min)",
+    )
+
+    @field_validator("lower_std")
+    @classmethod
+    def _validate_lower_std_positive(cls, v: list[float]) -> list[float]:
+        for i, s in enumerate(v):
+            if s <= 0:
+                raise ValueError(
+                    f"lower_std[{i}] must be positive, got {s}"
+                )
+        return v
+
+    @model_validator(mode="after")
+    def _validate_lengths_match(self) -> "MaxMassBoundsLikelihoodConfig":
+        if len(self.lower_mean) != len(self.lower_std):
+            raise ValueError(
+                f"lower_mean ({len(self.lower_mean)} entries) and "
+                f"lower_std ({len(self.lower_std)} entries) must have the same length"
+            )
+        return self
+
+
 # Discriminated union of all likelihood types
 LikelihoodConfig = Annotated[
     Union[
@@ -852,6 +982,8 @@ LikelihoodConfig = Annotated[
         REXLikelihoodConfig,
         ZeroLikelihoodConfig,
         MockMRLikelihoodConfig,
+        MockLambdaLikelihoodConfig,
+        MaxMassBoundsLikelihoodConfig,
     ],
     Discriminator("type"),
 ]

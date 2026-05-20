@@ -1,0 +1,30 @@
+seed: 44
+dry_run: false
+validate_only: false
+eos:
+  type: spectral
+  crust_name: SLy
+  n_points_high: 100
+  reparametrized: true
+tov:
+  type: scalar_tensor
+  min_nsat_TOV: 0.75
+  ndat_TOV: 100
+  nb_masses: 100
+prior:
+  specification_file: prior.prior
+likelihoods:
+- type: constraints_eos
+  enabled: true
+- type: constraints_gamma
+  enabled: true
+  penalty_gamma: -1.0e10
+sampler:
+  type: smc-rw
+  n_particles: 50
+  n_mcmc_steps: 5
+  target_ess: 0.9
+  random_walk_sigma: 0.1
+  output_dir: ./tiny_out/
+postprocessing:
+  enabled: false

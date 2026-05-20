@@ -19,11 +19,13 @@ from ..config.schema import (
     REXLikelihoodConfig,
     ZeroLikelihoodConfig,
     MockMRLikelihoodConfig,
+    MockLambdaLikelihoodConfig,
+    MaxMassBoundsLikelihoodConfig,
 )
 from .combined import CombinedLikelihood, ZeroLikelihood
-from .gw import GWLikelihood, GWLikelihoodResampled
+from .gw import GWLikelihood, GWLikelihoodResampled, MockLambdaLikelihood
 from .nicer import NICERLikelihood, NICERKDELikelihood, MockMRLikelihood
-from .radio import RadioTimingLikelihood
+from .radio import RadioTimingLikelihood, MaxMassBoundsLikelihood
 from .chieft import ChiEFTLikelihood
 from .constraints import (
     ConstraintEOSLikelihood,
@@ -201,6 +203,23 @@ def create_likelihood(
                 csv_file=config.csv_file,
                 penalty_value=config.penalty_value,
                 N_masses_evaluation=config.N_masses_evaluation,
+            )
+
+        case MockLambdaLikelihoodConfig():
+            return MockLambdaLikelihood(
+                csv_file=config.csv_file,
+                penalty_value=config.penalty_value,
+                N_masses_evaluation=config.N_masses_evaluation,
+            )
+
+        case MaxMassBoundsLikelihoodConfig():
+            return MaxMassBoundsLikelihood(
+                name=config.name,
+                lower_mean=config.lower_mean,
+                lower_std=config.lower_std,
+                upper_mean=config.upper_mean,
+                upper_std=config.upper_std,
+                penalty_value=config.penalty_value,
             )
 
         case _:

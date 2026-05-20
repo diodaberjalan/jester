@@ -530,175 +530,107 @@ class NICERKDELikelihood(LikelihoodBase):
 
 
 class MockMRLikelihood(LikelihoodBase):
-    """
-    Mock MR Likelihood evaluating deterministic skewed correlated posteriors.
-
-    This likelihood is intended for mock-data studies. It integrates a
-    bivariate skew-normal probability density over a fixed mass grid and
-    normalises by K mock observations correctly in log-space. Phase-transition
-    splitting is applied to the EOS M-R curve automatically.
-
-    Parameters
-    ----------
-    csv_file : str
-        Path to CSV file with columns: Mass_Center_Noise, Radius_Center_Noise,
-        Std_Mass, Std_Radius, Covariance, Skew_Mass, Skew_Radius.
-    penalty_value : float
-        Log-likelihood penalty for invalid configurations (default: -1e10).
-    N_masses_evaluation : int
-        Number of points in the mass grid for numerical integration (default: 200).
-    """
-
-    penalty_value: float
-    N_masses_evaluation: int
-    K: int
-    centers: jnp.ndarray
-    covs: jnp.ndarray
-    inv_covs: jnp.ndarray
-    log_det_covs: jnp.ndarray
-    skews: jnp.ndarray
-    omegas: jnp.ndarray
-    alpha_primes: jnp.ndarray
-    m_grid: jnp.ndarray
-    dm: float
-    log_norm_const: jnp.ndarray
-    log_two: float
-
     def __init__(
         self,
         csv_file: str,
         penalty_value: float = -1e10,
         N_masses_evaluation: int = 200,
+        center_col: tuple = ("Mass_Center_Noise", "Radius_Center_Noise"),
+        std_col: tuple = ("Std_Mass", "Std_Radius"),
+        skew_col: tuple = ("Skew_Mass", "Skew_Radius"),
+        y_key: str = "radii_EOS",
     ) -> None:
         super().__init__()
         self.penalty_value = penalty_value
         self.N_masses_evaluation = N_masses_evaluation
+        self.y_key = y_key
 
-        # Load data with numpy (host-side I/O, then convert to JAX)
-        data = np.genfromtxt(csv_file, delimiter=",", names=True)
-        self.K = len(data)
+        df = pd.read_csv(csv_file)
+        self.K = len(df)
 
-        # Parse columns
-        self.centers = jnp.stack(
-            [data["Mass_Center_Noise"], data["Radius_Center_Noise"]], axis=-1
-        )
-        std_m = jnp.array(data["Std_Mass"])
-        std_r = jnp.array(data["Std_Radius"])
-        cov_val = jnp.array(data["Covariance"])
-        self.skews = jnp.stack([data["Skew_Mass"], data["Skew_Radius"]], axis=-1)
+        self.centers = jnp.array(df[list(center_col)].values)
+        std_m = jnp.array(df[std_col[0]].values)
+        std_y = jnp.array(df[std_col[1]].values)  
+        cov_val = jnp.array(df["Covariance"].values)
+        self.skews = jnp.array(df[list(skew_col)].values)
 
-        # Build covariance matrices (K, 2, 2)
         covs = np.zeros((self.K, 2, 2))
-        covs[:, 0, 0] = std_m**2
-        covs[:, 1, 1] = std_r**2
+        covs[:, 0, 0] = std_m**2 + 1e-12
+        covs[:, 1, 1] = std_y**2 + 1e-12
         covs[:, 0, 1] = cov_val
         covs[:, 1, 0] = cov_val
         self.covs = jnp.array(covs)
 
-        # Precompute matrix inverses and log-determinants (host-side for speed)
-        self.inv_covs = jnp.array(np.linalg.inv(covs))
-        self.log_det_covs = jnp.array(np.linalg.slogdet(covs)[1])
-
-        # Precompute skew-normal modifiers
+        self.inv_covs = jnp.linalg.inv(self.covs)
+        self.log_det_covs = jnp.linalg.slogdet(self.covs)[1]
         self.omegas = jnp.sqrt(jnp.diagonal(self.covs, axis1=1, axis2=2))
         self.alpha_primes = self.skews / self.omegas
 
-        # Fixed mass grid for numerical integration
-        self.m_grid = jnp.linspace(0.1, 3.5, self.N_masses_evaluation)
-        self.dm = float(self.m_grid[1] - self.m_grid[0])
-
-        # Precompute static normalisation constant
-        self.log_norm_const = jnp.array(
-            -0.5 * (self.log_det_covs + 2.0 * np.log(2.0 * np.pi))
-        )
-        self.log_two = float(np.log(2.0))
-
     def evaluate(self, params: dict) -> float:
-        """Evaluate log-likelihood with phase-transition splitting.
-
-        Parameters
-        ----------
-        params : dict
-            Must contain ``masses_EOS``, ``radii_EOS`` (arrays from the EOS
-            transform).
-
-        Returns
-        -------
-        float
-            Log-likelihood value.
-        """
         masses_EOS = params["masses_EOS"]
-        radii_EOS = params["radii_EOS"]
-        mtov = jnp.max(masses_EOS)
+        y_EOS = params[self.y_key]
+        
+        valid_mask = jnp.isfinite(masses_EOS) & jnp.isfinite(y_EOS)
+        mtov = jnp.max(jnp.where(valid_mask, masses_EOS, self.penalty_value))
 
-        # Phase-transition splitting
-        split_idx = utils.get_MR_split_index(masses_EOS, radii_EOS)
+        split_idx = utils.get_MR_split_index(masses_EOS, y_EOS)
         idx = jnp.arange(masses_EOS.shape[0])
-        mask1 = idx < split_idx
-        mask2 = idx >= split_idx
+        mask1 = (idx < split_idx) & valid_mask
+        mask2 = (idx >= split_idx) & valid_mask
+
         SENTINEL = 1e30
 
-        # Segment 1
         m_eos_1 = jnp.where(mask1, masses_EOS, SENTINEL)
-        r_eos_1 = jnp.where(mask1, radii_EOS, 0.0)
+        y_eos_1 = jnp.where(mask1, y_EOS, 0.0)
         sort_1 = jnp.argsort(m_eos_1)
-        m_eos_1, r_eos_1 = m_eos_1[sort_1], r_eos_1[sort_1]
+        m_eos_1, y_eos_1 = m_eos_1[sort_1], y_eos_1[sort_1]
+        
         seg1_min = m_eos_1[0]
         seg1_max = jnp.max(jnp.where(m_eos_1 == SENTINEL, self.penalty_value, m_eos_1))
 
-        # Segment 2
         m_eos_2 = jnp.where(mask2, masses_EOS, SENTINEL)
-        r_eos_2 = jnp.where(mask2, radii_EOS, 0.0)
+        y_eos_2 = jnp.where(mask2, y_EOS, 0.0)
         sort_2 = jnp.argsort(m_eos_2)
-        m_eos_2, r_eos_2 = m_eos_2[sort_2], r_eos_2[sort_2]
+        m_eos_2, y_eos_2 = m_eos_2[sort_2], y_eos_2[sort_2]
+        
         seg2_min = m_eos_2[0]
         seg2_max = jnp.max(jnp.where(m_eos_2 == SENTINEL, self.penalty_value, m_eos_2))
 
-        def compute_log_prob_segment(
-            m_eos: Float[Array, " n_points"],
-            r_eos: Float[Array, " n_points"],
-            seg_min: Float,
-            seg_max: Float,
-        ) -> Float[Array, "K N"]:
-            # Interpolate radius over the fixed mass grid
-            r_grid = jnp.interp(self.m_grid, m_eos, r_eos)
-            mr_points = jnp.stack([self.m_grid, r_grid], axis=-1)  # (N, 2)
+        m_grid = jnp.linspace(0.1, 3.5, self.N_masses_evaluation)
+        dm = m_grid[1] - m_grid[0]
 
-            # Vectorised multivariate evaluation over K samples and N points
-            diff = mr_points[None, :, :] - self.centers[:, None, :]  # (K, N, 2)
+        def compute_log_prob_segment(m_eos_safe, y_eos_safe, seg_min, seg_max):
+            m_eos_safe = m_eos_safe + jnp.arange(m_eos_safe.shape[0]) * 1e-12
+            y_grid = jnp.interp(m_grid, m_eos_safe, y_eos_safe)
+            
+            xy_points = jnp.stack([m_grid, y_grid], axis=-1)
+            diff = xy_points[None, :, :] - self.centers[:, None, :]
             diff_transformed = jnp.einsum("kij,knj->kni", self.inv_covs, diff)
             quad_form = jnp.sum(diff * diff_transformed, axis=-1)
-
-            # Normal part (precomputed constant)
-            log_norm = self.log_norm_const[:, None] - 0.5 * quad_form
-
-            # Skewness correction
+            
+            log_norm = -0.5 * (self.log_det_covs[:, None] + quad_form + 2 * jnp.log(2 * jnp.pi))
             skew_arg = jnp.sum(self.alpha_primes[:, None, :] * diff, axis=-1)
-            log_skew = self.log_two + norm.logcdf(skew_arg)
-
+            log_skew = jnp.log(2.0) + norm.logcdf(skew_arg)
+            
             log_prob = log_norm + log_skew
+            
+            in_segment = (m_grid >= seg_min) & (m_grid <= seg_max)
+            log_prob = jnp.where(in_segment[None, :], log_prob, self.penalty_value)
+            penalty = jnp.where(m_grid > mtov, self.penalty_value, 0.0)
+            log_prob = log_prob + penalty[None, :]
+            return log_prob
 
-            # Discard out-of-segment points
-            in_segment = (self.m_grid >= seg_min) & (self.m_grid <= seg_max)
-            return jnp.where(in_segment[None, :], log_prob, self.penalty_value)
-
-        # Evaluate both segments
-        log_prob_seg1 = compute_log_prob_segment(m_eos_1, r_eos_1, seg1_min, seg1_max)
-        log_prob_seg2 = compute_log_prob_segment(m_eos_2, r_eos_2, seg2_min, seg2_max)
-
-        # Recombine segments and apply TOV penalty
-        global_penalty = jnp.where(self.m_grid > mtov, self.penalty_value, 0.0)
-        log_prob_combined = (
-            jnp.logaddexp(log_prob_seg1, log_prob_seg2) + global_penalty[None, :]
-        )
-
-        # Marginalise over M: sum(P * dm) -> logsumexp + log(dm)
-        logL_individuals = logsumexp(log_prob_combined, axis=1) + jnp.log(self.dm)
-
-        # Normalise by K (log of arithmetic mean)
-        total_log_likelihood = logsumexp(logL_individuals) - jnp.log(self.K)
+        log_prob_seg1 = compute_log_prob_segment(m_eos_1, y_eos_1, seg1_min, seg1_max)
+        log_prob_seg2 = compute_log_prob_segment(m_eos_2, y_eos_2, seg2_min, seg2_max)
+        
+        log_prob_combined = jnp.logaddexp(log_prob_seg1, log_prob_seg2)
+        logL_individuals = logsumexp(log_prob_combined, axis=1) + jnp.log(dm)
+        
+        total_log_likelihood = jnp.sum(logL_individuals)
 
         return total_log_likelihood
+
+        
 class MockMRLikelihood_old(LikelihoodBase):
     """
     Mock MR Likelihood evaluating deterministic skewed correlated posteriors.

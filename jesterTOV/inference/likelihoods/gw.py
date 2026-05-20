@@ -1,13 +1,17 @@
 r"""Gravitational wave event likelihood implementations"""
 
+import numpy as np
+
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 from jax.scipy.special import logsumexp
+from jax.scipy.stats import norm
 
 from jesterTOV.inference.base.likelihood import LikelihoodBase
 from jesterTOV.inference.flows.flow import Flow
 from jesterTOV.logging_config import get_logger
+import jesterTOV.utils as utils
 
 logger = get_logger("jester")
 
@@ -349,3 +353,135 @@ class GWLikelihood(LikelihoodBase):
         log_likelihood = logsumexp(all_logprobs) - jnp.log(self.N_masses_evaluation)
 
         return log_likelihood
+
+
+class MockLambdaLikelihood(LikelihoodBase):
+    """
+    Mock 4D Likelihood evaluating deterministic skewed correlated posteriors for binary pairs.
+    
+    Reads a paired CSV (m1, m2, l1, l2), treats the diagonal covariance
+    matrices efficiently by separating them into 2K independent 1D integrals,
+    and sums the log-likelihoods correctly.
+    """
+    def __init__(
+        self,
+        csv_file: str,
+        penalty_value: float = -1e10,
+        N_masses_evaluation: int = 200,
+        integration_sigma_cut: float = 8.0,
+    ) -> None:
+        super().__init__()
+        self.penalty_value = penalty_value
+        self.N_masses_evaluation = N_masses_evaluation
+        self.integration_sigma_cut = integration_sigma_cut
+        self.y_key = "Lambdas_EOS"
+
+        data = np.genfromtxt(csv_file, delimiter=",", names=True)
+        self.K_pairs = len(data)
+        self.K = self.K_pairs * 2  # Each binary pair contributes 2 separable component likelihoods
+
+        # Parse component 1
+        centers_1 = jnp.stack([data["Mass1_Center_Noise"], data["Lambda1_Center_Noise"]], axis=-1)
+        std_m1 = jnp.array(data["Std_Mass1"])
+        std_l1 = jnp.array(data["Std_Lambda1"])
+
+        # Parse component 2
+        centers_2 = jnp.stack([data["Mass2_Center_Noise"], data["Lambda2_Center_Noise"]], axis=-1)
+        std_m2 = jnp.array(data["Std_Mass2"])
+        std_l2 = jnp.array(data["Std_Lambda2"])
+
+        # Stack into 2K independent effective observations
+        self.centers = jnp.concatenate([centers_1, centers_2], axis=0)
+        std_m = jnp.concatenate([std_m1, std_m2], axis=0)
+        std_l = jnp.concatenate([std_l1, std_l2], axis=0)
+
+        # Assume 0 cross-covariance and skew within the sub-components based on pair CSV structure
+        cov_val = jnp.zeros(self.K)
+        self.skews = jnp.zeros((self.K, 2))
+
+        covs = np.zeros((self.K, 2, 2))
+        covs[:, 0, 0] = std_m**2 + 1e-12
+        covs[:, 1, 1] = std_l**2 + 1e-12
+        self.covs = jnp.array(covs)
+
+        self.inv_covs = jnp.linalg.inv(self.covs)
+        self.log_det_covs = jnp.linalg.slogdet(self.covs)[1]
+        self.omegas = jnp.sqrt(jnp.diagonal(self.covs, axis1=1, axis2=2))
+        self.alpha_primes = self.skews / self.omegas
+
+    def evaluate(self, params: dict) -> float:
+        masses_EOS = params["masses_EOS"]
+        y_EOS = params[self.y_key]
+        
+        valid_mask = jnp.isfinite(masses_EOS) & jnp.isfinite(y_EOS)
+        mtov = jnp.max(jnp.where(valid_mask, masses_EOS, self.penalty_value))
+
+        split_idx = utils.get_MR_split_index(masses_EOS, y_EOS)
+        idx = jnp.arange(masses_EOS.shape[0])
+        mask1 = (idx < split_idx) & valid_mask
+        mask2 = (idx >= split_idx) & valid_mask
+
+        SENTINEL = 1e30
+        dummy_m = jnp.linspace(1e5, 1e5 + 10.0, masses_EOS.shape[0])
+
+        m_eos_1 = jnp.where(mask1, masses_EOS, dummy_m)
+        y_eos_1 = jnp.where(mask1, y_EOS, 0.0)
+        sort_1 = jnp.argsort(m_eos_1)
+        m_eos_1, y_eos_1 = m_eos_1[sort_1], y_eos_1[sort_1]
+        
+        seg1_min = jnp.min(jnp.where(mask1, masses_EOS, SENTINEL))
+        seg1_max = jnp.max(jnp.where(mask1, masses_EOS, self.penalty_value))
+
+        m_eos_2 = jnp.where(mask2, masses_EOS, dummy_m)
+        y_eos_2 = jnp.where(mask2, y_EOS, 0.0)
+        sort_2 = jnp.argsort(m_eos_2)
+        m_eos_2, y_eos_2 = m_eos_2[sort_2], y_eos_2[sort_2]
+        
+        seg2_min = jnp.min(jnp.where(mask2, masses_EOS, SENTINEL))
+        seg2_max = jnp.max(jnp.where(mask2, masses_EOS, self.penalty_value))
+
+        def compute_log_integral_segment(m_eos_safe, y_eos_safe, seg_min, seg_max):
+            m_eos_safe = m_eos_safe + jnp.arange(m_eos_safe.shape[0]) * 1e-12
+            mass_std = self.omegas[:, 0]
+            mass_center = self.centers[:, 0]
+            window = self.integration_sigma_cut * mass_std
+
+            m_start = jnp.maximum(seg_min, mass_center - window)
+            m_stop = jnp.minimum(seg_max, mass_center + window)
+            has_support = m_stop > m_start
+
+            t_grid = jnp.linspace(0.0, 1.0, self.N_masses_evaluation)
+            m_grid = m_start[:, None] + (m_stop - m_start)[:, None] * t_grid[None, :]
+            y_grid = jnp.interp(m_grid, m_eos_safe, y_eos_safe)
+            
+            xy_points = jnp.stack([m_grid, y_grid], axis=-1)
+            diff = xy_points - self.centers[:, None, :]
+            diff_transformed = jnp.einsum("kij,knj->kni", self.inv_covs, diff)
+            quad_form = jnp.sum(diff * diff_transformed, axis=-1)
+            
+            log_norm = -0.5 * (self.log_det_covs[:, None] + quad_form + 2 * jnp.log(2 * jnp.pi))
+            skew_arg = jnp.sum(self.alpha_primes[:, None, :] * diff, axis=-1)
+            log_skew = jnp.log(2.0) + norm.logcdf(skew_arg)
+            
+            log_prob = log_norm + log_skew
+            
+            in_segment = (m_grid >= seg_min) & (m_grid <= seg_max) & has_support[:, None]
+            log_prob = jnp.where(in_segment, log_prob, self.penalty_value)
+            penalty = jnp.where(m_grid > mtov, self.penalty_value, 0.0)
+            log_prob = log_prob + penalty
+
+            dm = (m_stop - m_start) / (self.N_masses_evaluation - 1)
+            weights = jnp.ones(self.N_masses_evaluation)
+            weights = weights.at[0].set(0.5)
+            weights = weights.at[-1].set(0.5)
+            log_weights = jnp.log(dm[:, None]) + jnp.log(weights[None, :])
+            log_weights = jnp.where(has_support[:, None], log_weights, self.penalty_value)
+            return logsumexp(log_prob + log_weights, axis=1)
+
+        logL_seg1 = compute_log_integral_segment(m_eos_1, y_eos_1, seg1_min, seg1_max)
+        logL_seg2 = compute_log_integral_segment(m_eos_2, y_eos_2, seg2_min, seg2_max)
+        logL_individuals = jnp.logaddexp(logL_seg1, logL_seg2)
+        
+        total_log_likelihood = jnp.sum(logL_individuals)
+
+        return total_log_likelihood

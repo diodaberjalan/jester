@@ -27,6 +27,8 @@ from .schema import (
     DeprecatedConstraintsLikelihoodConfig,
     REXLikelihoodConfig,
     ZeroLikelihoodConfig,
+    MockMRLikelihoodConfig,
+    MockLambdaLikelihoodConfig,
     LikelihoodConfig,
     # Samplers
     BaseSamplerConfig,
@@ -68,6 +70,8 @@ __all__ = [
     "DeprecatedConstraintsLikelihoodConfig",
     "REXLikelihoodConfig",
     "ZeroLikelihoodConfig",
+    "MockMRLikelihoodConfig",
+    "MockLambdaLikelihoodConfig",
     "LikelihoodConfig",
     # Samplers
     "BaseSamplerConfig",

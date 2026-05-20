@@ -1,0 +1,4 @@
+spectral_reparam = MultivariateGaussianPrior(parameter_names=["gamma_0_tilde", "gamma_1_tilde", "gamma_2_tilde", "gamma_3_tilde"],)
+beta_ST = UniformPrior(-9, 0, parameter_names=["beta_ST"])
+phi_c = Fixed(1, parameter_names=["phi_c"])
+phi_inf_tgt = Fixed(1e-3, parameter_names=["phi_inf_tgt"])

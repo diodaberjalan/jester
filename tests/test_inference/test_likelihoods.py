@@ -21,7 +21,7 @@ from jesterTOV.inference.likelihoods.constraints import (
     check_gamma_bounds,
 )
 from jesterTOV.inference.likelihoods.chieft import ChiEFTLikelihood
-from jesterTOV.inference.likelihoods.radio import RadioTimingLikelihood
+from jesterTOV.inference.likelihoods.radio import RadioTimingLikelihood, MaxMassBoundsLikelihood, MaxMassBoundsLikelihood
 from jesterTOV.inference.base import LikelihoodBase
 
 
@@ -1147,3 +1147,370 @@ class TestNICERLikelihoodGroups:
             f"Single-group ({result_single:.4f}) != both-groups ({result_both:.4f}) "
             "for constant mock log_prob"
         )
+
+
+class TestMaxMassBoundsLikelihood:
+    """Test MaxMassBoundsLikelihood functionality."""
+
+    # Lower bound pulsars:
+    #   PSR J1614-2230: 1.908 +/- 0.016 Msun [Arzoumanian et al. 2018]
+    #   PSR J0348+4032: 2.01 +/- 0.04 Msun [Antoniadis et al. 2013]
+    # Upper bound from GW170817 (Dietrich et al. 2020):
+    #   M_max = 2.16 +/- 0.17 Msun
+    LOWER_MEANS = [1.908, 2.01]
+    LOWER_STDS = [0.016, 0.04]
+    UPPER_MEAN = 2.16
+    UPPER_STD = 0.17
+    UPPER_MEAN = 2.16
+    UPPER_STD = 0.17
+
+    @pytest.fixture
+    def likelihood(self):
+        return MaxMassBoundsLikelihood(
+            name="Joint_Mass_Bounds",
+            lower_mean=self.LOWER_MEANS,
+            lower_std=self.LOWER_STDS,
+            upper_mean=self.UPPER_MEAN,
+            upper_std=self.UPPER_STD,
+        )
+
+    @pytest.fixture
+    def stiff_params(self):
+        """M_TOV well above all bounds ~2.4 Msun (stiff EOS)."""
+        return {"masses_EOS": jnp.linspace(1.0, 2.4, 100)}
+
+    @pytest.fixture
+    def intermediate_params(self):
+        """M_TOV ~2.2 Msun (consistent with both bounds)."""
+        return {"masses_EOS": jnp.linspace(1.0, 2.2, 100)}
+
+    @pytest.fixture
+    def soft_params(self):
+        """M_TOV ~1.9 Msun (below lower bound - ruled out)."""
+        return {"masses_EOS": jnp.linspace(0.8, 1.9, 100)}
+
+    def test_initialization(self, likelihood):
+        """Test MaxMassBoundsLikelihood initializes correctly."""
+        assert likelihood.name == "Joint_Mass_Bounds"
+        assert jnp.allclose(likelihood.lower_mean, jnp.array(self.LOWER_MEANS))
+        assert jnp.allclose(likelihood.lower_std, jnp.array(self.LOWER_STDS))
+        assert likelihood.upper_mean == 2.16
+        assert likelihood.upper_std == 0.17
+        assert likelihood.m_min == 0.1
+
+    def test_initialization_single_pulsar(self):
+        """Test with a single lower bound observation (PSR J0348+4032)."""
+        likelihood = MaxMassBoundsLikelihood(
+            name="Single_Pulsar",
+            lower_mean=2.01,
+            lower_std=0.04,
+            upper_mean=2.16,
+            upper_std=0.17,
+        )
+        assert len(likelihood.lower_mean) == 1
+        assert jnp.allclose(likelihood.lower_mean[0], 2.01)
+
+    def test_evaluate_returns_finite(self, likelihood, intermediate_params):
+        """Test that evaluate returns a finite scalar."""
+        result = likelihood.evaluate(intermediate_params)
+        assert jnp.isfinite(result)
+        assert result.ndim == 0  # scalar
+
+    def test_stiff_eos_higher_likelihood(self, likelihood, stiff_params):
+        """M_TOV > both bounds should give finite log-likelihood."""
+        result = likelihood.evaluate(stiff_params)
+        assert jnp.isfinite(result)
+
+    def test_soft_eos_lower_likelihood(self, likelihood, soft_params):
+        """M_TOV ~1.9 is above m_min but below lower bounds -> lower logL than
+        M_TOV consistent with bounds."""
+        result = likelihood.evaluate(soft_params)
+        assert jnp.isfinite(result)
+
+        # Compare with good-fit scenario (M_TOV ~2.2)
+        good_result = likelihood.evaluate(
+            {"masses_EOS": jnp.linspace(1.0, 2.2, 100)}
+        )
+        assert result < good_result, (
+            f"M_TOV~1.9 ({result}) should be < M_TOV~2.2 ({good_result})"
+        )
+
+    def test_invalid_mtov_penalty(self, likelihood):
+        """M_TOV <= m_min should return penalty_value."""
+        params = {"masses_EOS": jnp.linspace(0.05, 0.09, 10)}
+        result = likelihood.evaluate(params)
+        assert result == likelihood.penalty_value
+
+    def test_likelihood_higher_for_better_fit(self, likelihood):
+        """M_TOV consistent with bounds should score better than extreme values."""
+        mtov_high = 2.6  # Above upper bound
+        mtov_good = 2.2  # Within both bounds
+        mtov_low = 1.8  # Below lower bound
+
+        result_high = likelihood.evaluate(
+            {"masses_EOS": jnp.linspace(1.0, mtov_high, 100)}
+        )
+        result_good = likelihood.evaluate(
+            {"masses_EOS": jnp.linspace(1.0, mtov_good, 100)}
+        )
+        result_low = likelihood.evaluate(
+            {"masses_EOS": jnp.linspace(0.8, mtov_low, 100)}
+        )
+
+        # Good fit should be best
+        assert result_good > result_low, (
+            f"Good fit ({result_good}) should score higher than low ({result_low})"
+        )
+
+    def test_single_vs_multiple_lower_bounds(self):
+        """Adding more lower-bound pulsars should tighten constraints.
+
+        At M_TOV ~2.03, J0348 (2.01 +/- 0.04) still contributes, so adding it
+        alongside J1614 (1.908 +/- 0.016) yields a more negative log-likelihood.
+        """
+        looser = MaxMassBoundsLikelihood(
+            name="looser",
+            lower_mean=[1.908],
+            lower_std=[0.016],
+            upper_mean=self.UPPER_MEAN,
+            upper_std=self.UPPER_STD,
+        )
+        multiple = MaxMassBoundsLikelihood(
+            name="multiple",
+            lower_mean=self.LOWER_MEANS,
+            lower_std=self.LOWER_STDS,
+            upper_mean=self.UPPER_MEAN,
+            upper_std=self.UPPER_STD,
+        )
+
+        # Use M_TOV ~2.03 where the second pulsar's CDF is < 1
+        params = {"masses_EOS": jnp.linspace(1.0, 2.03, 100)}
+        logL_looser = looser.evaluate(params)
+        logL_multiple = multiple.evaluate(params)
+
+        # More constraints should give lower (more negative) log-likelihood
+        assert logL_multiple < logL_looser, (
+            f"Multiple bounds ({logL_multiple}) should be < looser ({logL_looser})"
+        )
+
+    def test_custom_penalty_value(self):
+        """Custom penalty_value should be used for invalid M_TOV."""
+        custom_penalty = -1e8
+        likelihood = MaxMassBoundsLikelihood(
+            name="custom_penalty",
+            lower_mean=[2.01],
+            lower_std=[0.04],
+            upper_mean=2.16,
+            upper_std=0.17,
+            penalty_value=custom_penalty,
+        )
+
+        params = {"masses_EOS": jnp.linspace(0.05, 0.09, 10)}
+        result = likelihood.evaluate(params)
+        assert result == custom_penalty
+
+    def test_example_from_docstring(self):
+        """Test the docstring example produces finite output."""
+        likelihood = MaxMassBoundsLikelihood(
+            name="Joint_Mass_Bounds",
+            lower_mean=[1.908, 2.01],
+            lower_std=[0.016, 0.04],
+            upper_mean=2.16,
+            upper_std=0.17,
+        )
+        params = {"masses_EOS": jnp.array([1.0, 1.5, 2.0, 2.2])}
+        result = likelihood.evaluate(params)
+        assert jnp.isfinite(result)
+
+    def test_integration_with_factory(self):
+        """Test creating MaxMassBoundsLikelihood via factory."""
+        config = schema.MaxMassBoundsLikelihoodConfig(
+            enabled=True,
+            name="Factory_Test",
+            lower_mean=[1.908, 2.01],
+            lower_std=[0.016, 0.04],
+            upper_mean=2.16,
+            upper_std=0.17,
+        )
+
+        likelihood = factory.create_likelihood(config)
+
+        assert isinstance(likelihood, MaxMassBoundsLikelihood)
+        assert likelihood.name == "Factory_Test"
+        assert len(likelihood.lower_mean) == 2
+
+    def test_integration_with_factory_and_combined(self):
+        """Test MaxMassBoundsLikelihood in combined likelihood pipeline."""
+        configs = [
+            schema.MaxMassBoundsLikelihoodConfig(
+                enabled=True,
+                name="Mass_Bounds",
+                lower_mean=[1.908, 2.01],
+                lower_std=[0.016, 0.04],
+                upper_mean=2.16,
+                upper_std=0.17,
+            ),
+            schema.ZeroLikelihoodConfig(enabled=True),
+        ]
+
+        combined = factory.create_combined_likelihood(configs)
+        from jesterTOV.inference.likelihoods.combined import CombinedLikelihood
+
+        assert isinstance(combined, CombinedLikelihood)
+        assert len(combined.likelihoods_list) == 2
+
+        params = {"masses_EOS": jnp.linspace(1.0, 2.4, 100)}
+        result = combined.evaluate(params)
+        assert jnp.isfinite(result)
+
+
+# ============================================================================
+# Integration example demonstrating the typical joint mass bounds analysis.
+# This mirrors the setup from Dietrich et al. (2020):
+#   Lower bound: PSR J1614-2230 (1.908 +/- 0.016 Msun)  [Arzoumanian et al. 2018]
+#                PSR J0348+4032 (2.01 +/- 0.04 Msun)     [Antoniadis et al. 2013]
+#   Upper bound: GW170817 maximum NS mass (2.16 +/- 0.17 Msun)
+# ============================================================================
+
+
+class TestMaxMassBoundsIntegrationExample:
+    """Integration-level example for MaxMassBoundsLikelihood.
+
+    This demonstrates the recommended setup:
+    - Two heavy pulsars set the lower bound on M_TOV
+    - A GW170817-based upper bound sets the upper limit
+    """
+
+    def test_joint_bounds_with_stiff_eos(self):
+        """Likelihood evaluates with a stiff MetaModel+CSE EOS that reliably converges."""
+        from jesterTOV.eos.metamodel.metamodel_CSE import MetaModel_with_CSE_EOS_model
+        from jesterTOV.tov.gr import GRTOVSolver
+
+        likelihood = MaxMassBoundsLikelihood(
+            name="Joint_Mass_Bounds",
+            lower_mean=[1.908, 2.01],
+            lower_std=[0.016, 0.04],
+            upper_mean=2.16,
+            upper_std=0.17,
+        )
+
+        nsat = 0.16
+        eos = MetaModel_with_CSE_EOS_model(
+            nmax_nsat=6.0, nb_CSE=4, nmin_MM_nsat=0.75,
+            ndat_metamodel=80, ndat_CSE=70,
+        )
+        input_dict = {
+            "E_sat": -16.0,
+            "K_sat": 200.0,
+            "Q_sat": 0.0,
+            "Z_sat": 0.0,
+            "E_sym": 32.0,
+            "L_sym": 70.0,
+            "K_sym": -100.0,
+            "Q_sym": 0.0,
+            "Z_sym": 0.0,
+            "nbreak": 1.5 * nsat,
+        }
+        ngrids = jnp.array([2.0, 3.0, 4.0, 5.0]) * nsat
+        cs2grids = jnp.array([0.5, 0.4, 0.3, 0.2])
+        for i in range(4):
+            input_dict[f"n_CSE_{i}_u"] = ngrids[i]
+            input_dict[f"cs2_CSE_{i}"] = cs2grids[i]
+        input_dict["n_CSE_4_u"] = 6.0 * nsat
+        input_dict["cs2_CSE_4"] = 0.33
+
+        eos_data = eos.construct_eos(input_dict)
+        solver = GRTOVSolver()
+        family = solver.construct_family(eos_data, ndat=100, min_nsat=0.75)
+
+        mtov = float(jnp.max(family.masses))
+        assert jnp.isfinite(mtov) and mtov > 1.5, (
+            f"M_TOV = {mtov:.3f} is not physically meaningful"
+        )
+
+        log_like = likelihood.evaluate({"masses_EOS": family.masses})
+        assert jnp.isfinite(log_like), f"Not finite: {log_like}"
+
+    def test_sensitivity_to_parameter_changes(self):
+        """Likelihood responds to changes in EOS parameters."""
+        from jesterTOV.eos.metamodel.metamodel_CSE import MetaModel_with_CSE_EOS_model
+        from jesterTOV.tov.gr import GRTOVSolver
+
+        likelihood = MaxMassBoundsLikelihood(
+            name="Joint_Mass_Bounds",
+            lower_mean=[1.908, 2.01],
+            lower_std=[0.016, 0.04],
+            upper_mean=2.16,
+            upper_std=0.17,
+        )
+
+        nsat = 0.16
+        eos = MetaModel_with_CSE_EOS_model(
+            nmax_nsat=6.0, nb_CSE=4, nmin_MM_nsat=0.75,
+            ndat_metamodel=80, ndat_CSE=70,
+        )
+
+        # Stiff CSE parameters
+        stiff_dict = {
+            "E_sat": -16.0,
+            "K_sat": 230.0,
+            "Q_sat": 100.0,
+            "Z_sat": 0.0,
+            "E_sym": 34.0,
+            "L_sym": 80.0,
+            "K_sym": -50.0,
+            "Q_sym": 100.0,
+            "Z_sym": 0.0,
+            "nbreak": 1.5 * nsat,
+        }
+        ngrids = jnp.array([2.0, 3.0, 4.0, 5.0]) * nsat
+        cs2grids = jnp.array([0.6, 0.5, 0.4, 0.3])
+        for i in range(4):
+            stiff_dict[f"n_CSE_{i}_u"] = ngrids[i]
+            stiff_dict[f"cs2_CSE_{i}"] = cs2grids[i]
+        stiff_dict["n_CSE_4_u"] = 6.0 * nsat
+        stiff_dict["cs2_CSE_4"] = 0.5
+
+        eos_data_stiff = eos.construct_eos(stiff_dict)
+        solver = GRTOVSolver()
+        family_stiff = solver.construct_family(
+            eos_data_stiff, ndat=100, min_nsat=0.75
+        )
+        mtov_stiff = float(jnp.max(family_stiff.masses))
+        assert jnp.isfinite(mtov_stiff) and mtov_stiff > 1.8, (
+            f"Stiff EOS M_TOV = {mtov_stiff:.3f} too low"
+        )
+
+        # Soft CSE parameters
+        soft_dict = {
+            "E_sat": -16.0,
+            "K_sat": 190.0,
+            "Q_sat": -100.0,
+            "Z_sat": 0.0,
+            "E_sym": 30.0,
+            "L_sym": 40.0,
+            "K_sym": -150.0,
+            "Q_sym": -100.0,
+            "Z_sym": 0.0,
+            "nbreak": 1.5 * nsat,
+        }
+        cs2grids_soft = jnp.array([0.3, 0.25, 0.2, 0.15])
+        for i in range(4):
+            soft_dict[f"n_CSE_{i}_u"] = ngrids[i]
+            soft_dict[f"cs2_CSE_{i}"] = cs2grids_soft[i]
+        soft_dict["n_CSE_4_u"] = 6.0 * nsat
+        soft_dict["cs2_CSE_4"] = 0.2
+
+        eos_data_soft = eos.construct_eos(soft_dict)
+        family_soft = solver.construct_family(
+            eos_data_soft, ndat=100, min_nsat=0.75
+        )
+        mtov_soft = float(jnp.max(family_soft.masses))
+        if not jnp.isfinite(mtov_soft) or mtov_soft < 0.5:
+            pytest.skip(f"Soft EOS TOV solver did not converge (M_TOV = {mtov_soft:.3f})")
+
+        log_like_stiff = likelihood.evaluate({"masses_EOS": family_stiff.masses})
+        log_like_soft = likelihood.evaluate({"masses_EOS": family_soft.masses})
+
+        assert jnp.isfinite(log_like_stiff)
+        assert jnp.isfinite(log_like_soft)

@@ -60,6 +60,8 @@ from .schemas.likelihoods import (
     REXLikelihoodConfig,
     ZeroLikelihoodConfig,
     MockMRLikelihoodConfig,
+    MockLambdaLikelihoodConfig,
+    MaxMassBoundsLikelihoodConfig,
     LikelihoodConfig,
 )
 
@@ -258,6 +260,8 @@ __all__ = [
     "REXLikelihoodConfig",
     "ZeroLikelihoodConfig",
     "MockMRLikelihoodConfig",
+    "MockLambdaLikelihoodConfig",
+    "MaxMassBoundsLikelihoodConfig",
     "LikelihoodConfig",
     # Samplers
     "BaseSamplerConfig",
