@@ -16,7 +16,7 @@ from jax.scipy.special import logsumexp
 from jesterTOV.inference.base.likelihood import LikelihoodBase
 from jesterTOV.logging_config import get_logger
 import jesterTOV.utils as utils
-
+import pandas as pd
 from jesterTOV.inference.flows.flow import Flow
 
 logger = get_logger("jester")
