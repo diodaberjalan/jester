@@ -363,6 +363,9 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
         Returns:
             tuple: (proton_fraction, electron_fraction, muon_fraction)
         """
+        # Use the approximate (no-muon) solver result as initial guess
+        yp_approx = self.compute_proton_fraction(None, n)
+
         def muElec(ne):
             ne_safe = ne #jnp.clip(ne, 1e-25, None)
             kfe = jnp.power(3*jnp.pi*jnp.pi*ne_safe, 1.0/3.0)
@@ -376,20 +379,16 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
             xm = utils.hbarc * kf / utils.m_mu
             mu = utils.m_mu * jnp.sqrt(1 + xm*xm)
             return mu
-            
-        def guess_val_p(n):
-            n_per_nsat = n/utils.fm_inv3_to_geometric / 0.16
-            return 1/30 * n_per_nsat + 1/60
-        def guess_val_mu(n):
-            n_per_nsat = n/utils.fm_inv3_to_geometric / 0.16
-            return 0.0075 * n_per_nsat
-            
+
+        def guess_val_p(nb):
+            return jnp.interp(nb, n, yp_approx)
+
         # Energy density as function of densities
         total_energy_density = lambda n_n, n_p: self.eDenSky(n_n, n_p)
         nu_p = jax.grad(total_energy_density, argnums=1)
         nu_n = jax.grad(total_energy_density, argnums=0)
 
-        def betaHMnpe_optimistix(guessYe, nb):
+        def betaHMnpe_optimistix(nb):
             def fn(z, args=nb):
                 y = z
                 n_n = nb*(1-y)
@@ -399,15 +398,13 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
                 mup = nu_p(n_n, n_p) + utils.m_p
                 f = (mun - mup - mue)/mun
                 return f
-            guessYp = guess_val_p(nb)
-            z0 = jnp.array(guessYp)
+            z0 = jnp.array(guess_val_p(nb))
 
             # Use Newton with Dogleg fallback for robustness and speed
             sol = optx.root_find(fn, optx.Dogleg(rtol=1e-5, atol=1e-6), z0, throw=False, max_steps=1000)
             return sol.value
-            
 
-        def betaHMnpemu_optimistix(guess, nb):
+        def betaHMnpemu_optimistix(nb):
             def fn(z, args):
                 y1, y2 = z
                 y = y1 + y2
@@ -420,31 +417,29 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
                 f1 = (mun - mup - mue)/mun
                 f2 = (mumu - mue)/mue
                 return f1, f2
-            guess = [guess_val_p(nb),1.0e-9]
-            z0 = jnp.array(guess)
+            z0 = jnp.array([guess_val_p(nb), 1.0e-9])
             # Use Newton with Dogleg fallback for robustness and speed
             sol = optx.root_find(fn, optx.Newton(rtol=1e-5, atol=1e-6), z0, throw=False, max_steps=1000)
             return sol.value
 
         @jax.jit
-        def calc_ye_all_jit(guess_val, nb_array):
-            return jax.vmap(lambda nb: betaHMnpe_optimistix(guess_val, nb))(nb_array)
+        def calc_ye_all_jit(nb_array):
+            return jax.vmap(lambda nb: betaHMnpe_optimistix(nb))(nb_array)
 
         @jax.jit
-        def calc_conditional_fractions(guess_vec, nb_full, cond_mask, ye_arr):
+        def calc_conditional_fractions(nb_full, cond_mask, ye_arr):
             def compute_for_single(nb, has_muon, ye):
                 result = jax.lax.cond(
                     has_muon,
-                    lambda: betaHMnpemu_optimistix(guess_vec, nb),
+                    lambda: betaHMnpemu_optimistix(nb),
                     lambda: jnp.array([ye, 0.0])
                 )
                 return result
             return jax.vmap(compute_for_single)(nb_full, cond_mask, ye_arr)
 
-        guess = [0.04, 1.e-9]
-        ye_arr = calc_ye_all_jit(guess[0], n)
+        ye_arr = calc_ye_all_jit(n)
         cond = muElec(n * ye_arr) > utils.m_mu
-        final_arr = calc_conditional_fractions(guess, n, cond, ye_arr)
+        final_arr = calc_conditional_fractions(n, cond, ye_arr)
 
         yp_arr = final_arr[:, 0] + final_arr[:, 1]
 

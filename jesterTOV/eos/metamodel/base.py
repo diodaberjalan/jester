@@ -925,9 +925,11 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
             xm = utils.hbarc * kf / utils.m_mu
             return utils.m_mu * jnp.sqrt(1 + xm * xm)
 
+        # Use the quadratic approximation as initial guess for the exact solver
+        yp_quad = self.compute_proton_fraction(v_sat, v_sym2, n)
+
         def guess_val_p(nb):
-            n_per_nsat = nb / self.nsat
-            return 1 / 30 * n_per_nsat + 1 / 60
+            return jnp.interp(nb, n, yp_quad)
 
         total_energy_density = lambda n_n, n_p: (n_n + n_p) * self.compute_energy_simple(
             n_n, n_p, v_sat, v_sym2
@@ -945,7 +947,7 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
                 mue = mu_electron(nb * y)
                 return (mun - mup - mue) / mun
 
-            z0 = jnp.array(guess_val_p(nb))
+            z0 = jnp.array(guess_ye)
             solver = optx.Newton(rtol=1e-5, atol=1e-6)
             return optx.root_find(fn, solver, z0, throw=False).value
 
@@ -961,29 +963,30 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
                 mumu = mu_muon(nb * ym)
                 return (mun - mup - mue) / mun, (mumu - mue) / mue
 
-            z0 = jnp.array([guess_val_p(nb), 1.0e-9])
+            z0 = guess
             solver = optx.Newton(rtol=1e-5, atol=1e-6)
             return optx.root_find(fn, solver, z0, throw=False).value
 
         @jax.jit
-        def calc_ye_all(guess_val, nb_array):
-            return jax.vmap(lambda nb: beta_npe(guess_val, nb))(nb_array)
+        def calc_ye_all(nb_array):
+            return jax.vmap(lambda nb: beta_npe(guess_val_p(nb), nb))(nb_array)
 
         @jax.jit
-        def calc_fractions(guess_vec, nb_full, cond_mask, ye_arr):
+        def calc_fractions(nb_full, cond_mask, ye_arr):
             def compute_for_single(nb, has_muon, ye):
                 return jax.lax.cond(
                     has_muon,
-                    lambda: beta_npemu(guess_vec, nb),
+                    lambda: beta_npemu(
+                        jnp.array([guess_val_p(nb), 1.0e-9]), nb
+                    ),
                     lambda: jnp.array([ye, 0.0]),
                 )
 
             return jax.vmap(compute_for_single)(nb_full, cond_mask, ye_arr)
 
-        guess = jnp.array([0.04, 1.0e-9])
-        ye_arr = calc_ye_all(guess[0], n)
+        ye_arr = calc_ye_all(n)
         cond = mu_electron(n * ye_arr) > utils.m_mu
-        final_arr = calc_fractions(guess, n, cond, ye_arr)
+        final_arr = calc_fractions(n, cond, ye_arr)
 
         electron_fraction = jnp.array(final_arr[:, 0])
         muon_fraction = jnp.array(final_arr[:, 1])
