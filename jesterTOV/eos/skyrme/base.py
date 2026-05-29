@@ -401,7 +401,7 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
             z0 = jnp.array(guess_val_p(nb))
 
             # Use Newton with Dogleg fallback for robustness and speed
-            sol = optx.root_find(fn, optx.Dogleg(rtol=1e-5, atol=1e-6), z0, throw=False, max_steps=1000)
+            sol = optx.root_find(fn, optx.Newton(rtol=1e-5, atol=1e-6), z0, throw=False, max_steps=1000)
             return sol.value
 
         def betaHMnpemu_optimistix(nb):
@@ -470,53 +470,42 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
         r"""
         Compute proton fraction from approximate beta-equilibrium without muons.
 
-        This is a simplified version without muon contributions.
+        Uses the parabolic approximation of the symmetry energy to obtain a
+        fast analytic estimate: solves the cubic equation
+
+        .. math::
+            8 S(n) \, y^3 + \hbar c (3\pi^2 n)^{1/3} \, y
+            = 4 S(n) + (m_n - m_p)
+
+        where :math:`y = x_p^{1/3}` and :math:`S(n)` is the Skyrme symmetry
+        energy per particle.  The symmetry energy is obtained via a finite-
+        difference of the Skyrme energy density functional between pure
+        neutron matter and symmetric nuclear matter.
 
         Args:
             coefficient_sym: Not used (kept for interface compatibility)
             n: Total baryon density [:math:`\mathrm{fm}^{-3}`]
 
         Returns:
-            Float[Array, "n_points"]: Proton fraction
+            Float[Array, "n_points"]: Proton fraction :math:`x_p = n_p/n`.
         """
-        # Simplified beta-equilibrium without muons
-        def muElec(ne):
-            ne_safe = ne#jnp.clip(ne, 1e-25, None)
-            kfe = jnp.power(3*jnp.pi*jnp.pi*ne_safe, 1.0/3.0)
-            xe = utils.hbarc * kfe / utils.m_e
-            mue = utils.m_e * jnp.sqrt(1 + xe*xe)
-            return mue
-        def guess_val_p(n):
-            n_per_nsat = n/utils.fm_inv3_to_geometric / 0.16
-            return 1/30 * n_per_nsat + 1/60
-        total_energy_density = lambda n_n, n_p: self.eDenSky(n_n, n_p)
-        nu_p = jax.grad(total_energy_density, argnums=1)
-        nu_n = jax.grad(total_energy_density, argnums=0)
+        # Symmetry energy per particle from Skyrme functional:
+        #   S(n) = [e(n, δ=1) - e(n, δ=0)] / n
+        #   δ=1 → pure neutron matter (ron=n, rop=0)
+        #   δ=0 → symmetric matter   (ron=n/2, rop=n/2)
+        e_pnm = self.eDenSky(n, 0.0)          # pure neutron matter
+        e_snm = self.eDenSky(n / 2, n / 2)     # symmetric matter
+        S_n = (e_pnm - e_snm) / n
 
-        def betaHMnpe(guessYe, nb):
-            def fn(z, args=nb):
-                y = z
-                n_n = nb*(1-y)
-                n_p = nb*y
-                mue = muElec(nb * y)
-                mun = nu_n(n_n, n_p) + utils.m_n
-                mup = nu_p(n_n, n_p) + utils.m_p
-                f = (mun - mup - mue)/mun
-                return f
-            guessYp = guess_val_p(nb)
-            z0 = jnp.array(guessYp)
+        # Coefficients of the cubic a y^3 + b y^2 + c y + d = 0
+        a = 8.0 * S_n
+        b = jnp.zeros_like(n)
+        c = utils.hbarc * jnp.power(3.0 * jnp.pi**2 * n, 1.0 / 3.0)
+        d = -4.0 * S_n - (utils.m_n - utils.m_p)
 
-            # Use Newton with Dogleg fallback for robustness and speed
-            sol = optx.root_find(fn, optx.Newton(rtol=1e-5, atol=1e-6), z0, throw=False, max_steps=1000)
-            return sol.value
-
-        @jax.jit
-        def calc_ye_all_jit(guess_val, nb_array):
-            return jax.vmap(lambda nb: betaHMnpe(guess_val, nb))(nb_array)
-
-        guess = 0.04
-        proton_fraction = calc_ye_all_jit(guess, n)
-
+        coeffs = jnp.stack([a, b, c, d], axis=1)
+        ys = utils.cubic_root_for_proton_fraction(coeffs)
+        proton_fraction = ys**3  # type: ignore[operator]
         return proton_fraction
 
     # type: ignore[override]
