@@ -381,7 +381,8 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
             return mu
 
         def guess_val_p(nb):
-            return jnp.interp(nb, n, yp_approx)
+            interp_val = jnp.interp(nb, n, yp_approx)
+            return jnp.where(interp_val == 0.0, 1.0e-9, interp_val)
 
         # Energy density as function of densities
         total_energy_density = lambda n_n, n_p: self.eDenSky(n_n, n_p)
@@ -401,7 +402,7 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
             z0 = jnp.array(guess_val_p(nb))
 
             # Use Newton with Dogleg fallback for robustness and speed
-            sol = optx.root_find(fn, optx.Newton(rtol=1e-5, atol=1e-6), z0, throw=False)
+            sol = optx.root_find(fn, optx.Newton(rtol=1e-5, atol=1e-6), z0, throw=False, max_steps=1000)
             return sol.value
 
         def betaHMnpemu_optimistix(nb):
@@ -419,7 +420,7 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
                 return f1, f2
             z0 = jnp.array([guess_val_p(nb), 1.0e-9])
             # Use Newton with Dogleg fallback for robustness and speed
-            sol = optx.root_find(fn, optx.Newton(rtol=1e-5, atol=1e-6), z0, throw=False)
+            sol = optx.root_find(fn, optx.Newton(rtol=1e-5, atol=1e-6), z0, throw=False, max_steps=1000)
             return sol.value
 
         @jax.jit
@@ -662,11 +663,9 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
         else:
             proton_fraction_arr = proton_fraction
 
-        # Compute cs2.  leptons are already included in p_total / e_total
-        # (computed above), so do NOT pass e_fraction here to avoid
-        # double-counting inside compute_cs2.
+        # Compute cs2 including lepton contributions
         cs2_Skyrme = self.compute_cs2(  # type: ignore[arg-type]
-            self.n_Skyrme, p_total, e_total, proton_fraction_arr, e_fraction=None
+            self.n_Skyrme, p_total, e_total, proton_fraction_arr, e_final_arr
         )
 
         # Spline for speed of sound for the connection region
@@ -739,16 +738,57 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
         Returns:
             Array: Speed of sound squared
         """
-        # Compute derivatives for cs2: cs2 = dp/dE = (dp/dn) / (de/dn)
         dn = n[1] - n[0]
         dp_dn = jnp.gradient(p, dn)
         de_dn = jnp.gradient(e, dn)
 
-        # Guard against 0/0 singularities (e.g. when pf→0 flattens the EOS
-        # at high density, producing NaN from consecutive identical values).
-        cs2 = jnp.where(jnp.abs(de_dn) > 1e-15, dp_dn / de_dn, 0.0)
+        cs2 = dp_dn / (de_dn + 1e-10)
 
-        # Include lepton contributions to cs2 if present
+        return cs2
+
+    def compute_cs2_higher_order(
+        self,
+        n: Array,
+        p: Array,
+        e: Array,
+        proton_fraction: Array,
+        e_fraction: Array | None = None,
+    ):
+        r"""
+        Compute speed of sound squared using 4th-order centered differences.
+
+        Uses a 4th-order finite difference stencil for smoother derivatives
+        than the standard 2nd-order :func:`jnp.gradient`. Falls back to
+        2nd-order at the 2 boundary points on each end.
+
+        Args:
+            n: Number density [:math:`\mathrm{fm}^{-3}`]
+            p: Pressure [:math:`\mathrm{MeV} \, \mathrm{fm}^{-3}`]
+            e: Energy density [:math:`\mathrm{MeV} \, \mathrm{fm}^{-3}`]
+            proton_fraction: Proton fraction
+            e_fraction: Electron fraction (if available)
+
+        Returns:
+            Array: Speed of sound squared
+        """
+        dn = n[1] - n[0]
+
+        # 4th-order centered difference for interior points 2..N-3:
+        #   f'(x_i) = (f[i-2] - 8*f[i-1] + 8*f[i+1] - f[i+2]) / (12*dn)
+        dp_2nd = jnp.gradient(p, dn)
+        dp_4th = jnp.empty_like(p)
+        dp_4th = dp_4th.at[2:-2].set(
+            (p[:-4] - 8 * p[1:-3] + 8 * p[3:-1] - p[4:]) / (12.0 * dn)
+        )
+        dp_4th = dp_4th.at[:2].set(dp_2nd[:2])
+        dp_4th = dp_4th.at[-2:].set(dp_2nd[-2:])
+
+        # Exact thermodynamic identity for de_dn
+        de_dn = (e + p) / n
+        dp_dn = dp_4th
+
+        cs2 = dp_dn / (de_dn + 1e-15)
+
         if e_fraction is not None:
             muon_fraction = jnp.maximum(1e-25, proton_fraction - e_fraction)
 
@@ -771,14 +811,20 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
             e_lepton = e_electron + e_muon
             p_lepton = p_electron + p_muon
 
-            # Total cs2 with leptons
             e_total = e + e_lepton
             p_total = p + p_lepton
 
-            dp_dn_total = jnp.gradient(p_total, dn)
-            de_dn_total = jnp.gradient(e_total, dn)
+            # 4th-order on total quantities
+            dp_2nd_total = jnp.gradient(p_total, dn)
+            dp_4th_total = jnp.empty_like(p_total)
+            dp_4th_total = dp_4th_total.at[2:-2].set(
+                (p_total[:-4] - 8 * p_total[1:-3] + 8 * p_total[3:-1] - p_total[4:]) / (12.0 * dn)
+            )
+            dp_4th_total = dp_4th_total.at[:2].set(dp_2nd_total[:2])
+            dp_4th_total = dp_4th_total.at[-2:].set(dp_2nd_total[-2:])
 
-            cs2 = jnp.where(jnp.abs(de_dn_total) > 1e-15, dp_dn_total / de_dn_total, 0.0)
+            de_dn_total = (e_total + p_total) / n
+            cs2 = dp_4th_total / (de_dn_total + 1e-15)
 
         return cs2
 

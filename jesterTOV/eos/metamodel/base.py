@@ -929,7 +929,7 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
         yp_quad = self.compute_proton_fraction(v_sat, v_sym2, n)
 
         def guess_val_p(nb):
-            return jnp.interp(nb, n, yp_quad)
+            return jnp.maximum(jnp.interp(nb, n, yp_quad), 1.0e-9)
 
         total_energy_density = lambda n_n, n_p: (n_n + n_p) * self.compute_energy_simple(
             n_n, n_p, v_sat, v_sym2
