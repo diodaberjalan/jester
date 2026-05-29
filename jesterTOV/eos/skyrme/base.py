@@ -739,14 +739,14 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
         Returns:
             Array: Speed of sound squared
         """
-        # Compute derivatives for cs2
-        # cs2 = dp/dE = (dp/dn) / (de/dn)
+        # Compute derivatives for cs2: cs2 = dp/dE = (dp/dn) / (de/dn)
         dn = n[1] - n[0]
         dp_dn = jnp.gradient(p, dn)
         de_dn = jnp.gradient(e, dn)
 
-        cs2 = dp_dn / (de_dn + 1e-10)
-        # cs2 = jnp.clip(cs2, 1e-5, 1.0)
+        # Guard against 0/0 singularities (e.g. when pf→0 flattens the EOS
+        # at high density, producing NaN from consecutive identical values).
+        cs2 = jnp.where(jnp.abs(de_dn) > 1e-15, dp_dn / de_dn, 0.0)
 
         # Include lepton contributions to cs2 if present
         if e_fraction is not None:
@@ -775,11 +775,10 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
             e_total = e + e_lepton
             p_total = p + p_lepton
 
-            dp_dn_total = jnp.gradient(p_total, n[1] - n[0])
-            de_dn_total = jnp.gradient(e_total, n[1] - n[0])
+            dp_dn_total = jnp.gradient(p_total, dn)
+            de_dn_total = jnp.gradient(e_total, dn)
 
-            cs2 = dp_dn_total / (de_dn_total + 1e-10)
-            # cs2 = jnp.clip(cs2, 1e-5, 1.0)
+            cs2 = jnp.where(jnp.abs(de_dn_total) > 1e-15, dp_dn_total / de_dn_total, 0.0)
 
         return cs2
 
