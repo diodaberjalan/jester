@@ -41,6 +41,8 @@ class BaseMetamodelEOSConfig(BaseEOSConfig):
     ndat_metamodel: int = 100
     nmax_nsat: float = 25.0
     nmin_MM_nsat: float = 0.75
+    proton_fraction: str | float | None = None
+    calculate_durca: bool = False
 
 
 class MetamodelEOSConfig(BaseMetamodelEOSConfig):
@@ -54,7 +56,7 @@ class MetamodelEOSConfig(BaseMetamodelEOSConfig):
         Must be 0 for standard metamodel (no CSE extension)
     """
 
-    type: Literal["metamodel"] = "metamodel"
+    type: Literal["metamodel", "metamodel_only"] = "metamodel"
     nb_CSE: int = 0
 
     @field_validator("nb_CSE")
@@ -166,6 +168,60 @@ class SpectralEOSConfig(BaseEOSConfig):
         return v
 
 
+class BaseSkyrmeEOSConfig(BaseEOSConfig):
+    r"""Base configuration shared by all Skyrme-based EOS types."""
+
+    ndat_skyrme: int = 100
+    nmax_nsat: float = 12.0
+    nmin_Skyrme_nsat: float = 0.75
+    proton_fraction: str | float | None = None
+    calculate_durca: bool = False
+
+
+class SkyrmeEOSConfig(BaseSkyrmeEOSConfig):
+    r"""Configuration for standalone Skyrme EOS."""
+
+    type: Literal["skyrme", "skyrme_only", "skryme_only"] = "skyrme"
+    nb_CSE: int = 0
+
+    @field_validator("nb_CSE")
+    @classmethod
+    def _validate_nb_cse(cls, v: int) -> int:
+        if v != 0:
+            raise ValueError(
+                "nb_CSE must be 0 for standalone Skyrme. "
+                "Use type='skyrme_cse' for CSE extension."
+            )
+        return v
+
+
+class SkyrmeCSEEOSConfig(BaseSkyrmeEOSConfig):
+    r"""Configuration for Skyrme EOS with CSE extension."""
+
+    type: Literal["skyrme_cse"] = "skyrme_cse"
+    nb_CSE: int = 8
+    ndat_CSE: int = 100
+    max_nbreak_nsat: float | None = None
+
+    @field_validator("nb_CSE")
+    @classmethod
+    def _validate_nb_cse(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError(
+                "nb_CSE must be > 0 for type='skyrme_cse'. "
+                "Use type='skyrme_only' for standalone Skyrme."
+            )
+        return v
+
+
+class SkyrmePeakCSEEOSConfig(BaseSkyrmeEOSConfig):
+    r"""Configuration for Skyrme EOS with peakCSE extension."""
+
+    type: Literal["skyrme_peak_cse"] = "skyrme_peak_cse"
+    ndat_CSE: int = 100
+    max_nbreak_nsat: float | None = None
+
+
 # Discriminated union of all EOS types
 EOSConfig = Annotated[
     Union[
@@ -173,6 +229,9 @@ EOSConfig = Annotated[
         MetamodelCSEEOSConfig,
         MetamodelPeakCSEEOSConfig,
         SpectralEOSConfig,
+        SkyrmeEOSConfig,
+        SkyrmeCSEEOSConfig,
+        SkyrmePeakCSEEOSConfig,
     ],
     Discriminator("type"),
 ]

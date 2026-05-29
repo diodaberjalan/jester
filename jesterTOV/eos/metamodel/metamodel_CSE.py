@@ -1,7 +1,7 @@
 r"""Meta-model EOS with piecewise constant speed-of-sound extensions (CSE)."""
 
 import jax.numpy as jnp
-from jaxtyping import Float, Int
+from jaxtyping import Array, Float, Int
 
 from jesterTOV import utils
 from jesterTOV.eos.base import Interpolate_EOS_model
@@ -115,7 +115,11 @@ class MetaModel_with_CSE_EOS_model(Interpolate_EOS_model):
     def construct_eos(
         self,
         params: dict[str, float],
-    ) -> EOSData:
+        ngrids: Float[Array, "n_grid_point"] | None = None,
+        cs2grids: Float[Array, "n_grid_point"] | None = None,
+        return_extra: bool = False,
+        calculate_durca: bool | None = None,
+    ) -> EOSData | tuple:
         r"""
         Construct the EOS by combining metamodel and CSE regions.
 
@@ -148,30 +152,45 @@ class MetaModel_with_CSE_EOS_model(Interpolate_EOS_model):
         # Extract break density
         nbreak = params["nbreak"]
 
-        # Convert individual CSE grid point parameters to arrays
-        ngrids_u = jnp.array([params[f"n_CSE_{i}_u"] for i in range(self.nb_CSE)])
-        ngrids_u = jnp.sort(ngrids_u)  # Sort to ensure monotonic grid
-        cs2grids = jnp.array([params[f"cs2_CSE_{i}"] for i in range(self.nb_CSE)])
+        if ngrids is None or cs2grids is None:
+            # Convert individual CSE grid point parameters to arrays
+            ngrids_u = jnp.array([params[f"n_CSE_{i}_u"] for i in range(self.nb_CSE)])
+            ngrids_u = jnp.sort(ngrids_u)  # Sort to ensure monotonic grid
+            cs2grids = jnp.array([params[f"cs2_CSE_{i}"] for i in range(self.nb_CSE)])
 
-        # Convert from normalized positions [0,1] to physical densities [nbreak, nmax]
-        width = self.nmax - nbreak
-        ngrids = nbreak + ngrids_u * width
+            # Convert from normalized positions [0,1] to physical densities [nbreak, nmax]
+            width = self.nmax - nbreak
+            ngrids = nbreak + ngrids_u * width
 
-        # Append final grid point at nmax
-        ngrids = jnp.append(ngrids, jnp.array([self.nmax]))
-        cs2grids = jnp.append(cs2grids, jnp.array([params[f"cs2_CSE_{self.nb_CSE}"]]))
+            # Append final grid point at nmax
+            ngrids = jnp.append(ngrids, jnp.array([self.nmax]))
+            cs2grids = jnp.append(
+                cs2grids, jnp.array([params[f"cs2_CSE_{self.nb_CSE}"]])
+            )
 
         # Construct the metamodel part using the pre-instantiated metamodel
         # This gives us the full range up to nmax
-        mm_output = self.metamodel.construct_eos(params)
+        # When return_extra=True, construct_eos returns a legacy tuple
+        # (ns, ps, hs, es, dloge_dlogps, mu, cs2, extra_constraints)
+        (
+            n_metamodel_full_arr,
+            p_metamodel_full_arr,
+            _hs,
+            e_metamodel_full_arr,
+            _dloge_dlogps,
+            mu_metamodel_full_arr,
+            cs2_metamodel_full_arr,
+            extra_constraints,
+        ) = self.metamodel.construct_eos(
+            params, return_extra=True, calculate_durca=calculate_durca
+        )
 
         # Convert units back for interpolation
-        n_metamodel_full = mm_output.ns / utils.fm_inv3_to_geometric
-        p_metamodel_full = mm_output.ps / utils.MeV_fm_inv3_to_geometric
-        e_metamodel_full = mm_output.es / utils.MeV_fm_inv3_to_geometric
-        # MetaModel guarantees mu is populated
-        mu_metamodel_full: Float[Array, "n_points"] = mm_output.mu  # type: ignore[assignment]
-        cs2_metamodel_full = mm_output.cs2
+        n_metamodel_full = n_metamodel_full_arr / utils.fm_inv3_to_geometric
+        p_metamodel_full = p_metamodel_full_arr / utils.MeV_fm_inv3_to_geometric
+        e_metamodel_full = e_metamodel_full_arr / utils.MeV_fm_inv3_to_geometric
+        mu_metamodel_full: Float[Array, "n_points"] = mu_metamodel_full_arr  # type: ignore[assignment]
+        cs2_metamodel_full = cs2_metamodel_full_arr
 
         # Re-interpolate to a fixed-size array up to nbreak
         # This maintains JAX compatibility while allowing variable nbreak
@@ -216,7 +235,7 @@ class MetaModel_with_CSE_EOS_model(Interpolate_EOS_model):
 
         ns, ps, hs, es, dloge_dlogps = self.interpolate_eos(n, p, e)
 
-        return EOSData(
+        eos_data = EOSData(
             ns=ns,
             ps=ps,
             hs=hs,
@@ -224,8 +243,11 @@ class MetaModel_with_CSE_EOS_model(Interpolate_EOS_model):
             dloge_dlogps=dloge_dlogps,
             cs2=cs2,
             mu=mu,
-            extra_constraints=mm_output.extra_constraints,
+            extra_constraints=extra_constraints,
         )
+        if return_extra:
+            return (ns, ps, hs, es, dloge_dlogps, mu, cs2, extra_constraints)
+        return eos_data
 
     def get_required_parameters(self) -> list[str]:
         """

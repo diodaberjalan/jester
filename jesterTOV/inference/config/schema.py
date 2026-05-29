@@ -30,6 +30,10 @@ from .schemas.eos import (
     MetamodelCSEEOSConfig,
     MetamodelPeakCSEEOSConfig,
     SpectralEOSConfig,
+    BaseSkyrmeEOSConfig,
+    SkyrmeEOSConfig,
+    SkyrmeCSEEOSConfig,
+    SkyrmePeakCSEEOSConfig,
     EOSConfig,
 )
 
@@ -232,6 +236,10 @@ __all__ = [
     "MetamodelCSEEOSConfig",
     "MetamodelPeakCSEEOSConfig",
     "SpectralEOSConfig",
+    "BaseSkyrmeEOSConfig",
+    "SkyrmeEOSConfig",
+    "SkyrmeCSEEOSConfig",
+    "SkyrmePeakCSEEOSConfig",
     "EOSConfig",
     # TOV
     "BaseTOVConfig",

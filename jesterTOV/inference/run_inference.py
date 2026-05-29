@@ -21,6 +21,9 @@ from .config.schema import (
     MetamodelCSEEOSConfig,
     MetamodelPeakCSEEOSConfig,
     BaseMetamodelEOSConfig,
+    SkyrmeCSEEOSConfig,
+    SkyrmePeakCSEEOSConfig,
+    BaseSkyrmeEOSConfig,
     GWLikelihoodConfig,
     GWEventConfig,
 )
@@ -77,7 +80,9 @@ def determine_keep_names(
     chieft_enabled = any(
         lk.enabled and lk.type == "chieft" for lk in config.likelihoods
     )
-    if chieft_enabled and isinstance(config.eos, MetamodelCSEEOSConfig):
+    if chieft_enabled and isinstance(
+        config.eos, (MetamodelCSEEOSConfig, SkyrmeCSEEOSConfig)
+    ):
         if "nbreak" not in prior.parameter_names and "nbreak" not in _fixed:
             raise ValueError(
                 "ChiEFT likelihood is enabled with metamodel_cse but 'nbreak' parameter is not in the prior. "
@@ -119,9 +124,15 @@ def setup_prior(config: InferenceConfig) -> tuple[CombinePrior, dict[str, float]
     from .base.prior import UniformPrior, CombinePrior
 
     # Determine conditional parameters
-    nb_CSE = config.eos.nb_CSE if isinstance(config.eos, MetamodelCSEEOSConfig) else 0
+    nb_CSE = (
+        config.eos.nb_CSE
+        if isinstance(config.eos, (MetamodelCSEEOSConfig, SkyrmeCSEEOSConfig))
+        else 0
+    )
     # peakCSE uses nbreak as a core parameter (not gated by nb_CSE)
-    include_nbreak = isinstance(config.eos, MetamodelPeakCSEEOSConfig)
+    include_nbreak = isinstance(
+        config.eos, (MetamodelPeakCSEEOSConfig, SkyrmePeakCSEEOSConfig)
+    )
 
     # Check if GW or NICER likelihoods are enabled (both need _random_key)
     # Note: the default `gw` and `nicer` likelihoods do NOT need
@@ -183,10 +194,10 @@ def setup_transform(
     """
     _fixed_params = fixed_params or {}
 
-    # Determine max_nbreak_nsat for MetamodelCSE: compare config field vs prior bound
+    # Determine max_nbreak_nsat for CSE-style EOS: compare config vs prior bound.
     # TODO: in a future version, need to improve this...
     max_nbreak_nsat = None
-    if isinstance(config.eos, MetamodelCSEEOSConfig):
+    if isinstance(config.eos, (MetamodelCSEEOSConfig, SkyrmeCSEEOSConfig)):
         config_value = config.eos.max_nbreak_nsat
         prior_value = None
 
@@ -727,15 +738,18 @@ def main(config_path: str) -> None:
 
     # Log transform details
     logger.info(f"EOS type: {config.eos.type}")
-    if isinstance(config.eos, MetamodelCSEEOSConfig):
+    if isinstance(config.eos, (MetamodelCSEEOSConfig, SkyrmeCSEEOSConfig)):
         logger.info(f"  nb_CSE: {config.eos.nb_CSE}")
         if config.eos.max_nbreak_nsat is not None:
             logger.info(f"  max_nbreak_nsat: {config.eos.max_nbreak_nsat:.4f} n_sat")
-    if isinstance(config.eos, MetamodelPeakCSEEOSConfig):
+    if isinstance(config.eos, (MetamodelPeakCSEEOSConfig, SkyrmePeakCSEEOSConfig)):
         if config.eos.max_nbreak_nsat is not None:
             logger.info(f"  max_nbreak_nsat: {config.eos.max_nbreak_nsat:.4f} n_sat")
     if isinstance(config.eos, BaseMetamodelEOSConfig):
         logger.info(f"  ndat_metamodel: {config.eos.ndat_metamodel}")
+        logger.info(f"  nmax_nsat: {config.eos.nmax_nsat}")
+    if isinstance(config.eos, BaseSkyrmeEOSConfig):
+        logger.info(f"  ndat_skyrme: {config.eos.ndat_skyrme}")
         logger.info(f"  nmax_nsat: {config.eos.nmax_nsat}")
     logger.info(f"TOV solver: {config.tov.type}")
     logger.info(f"  ndat_TOV: {config.tov.ndat_TOV}")

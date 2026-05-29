@@ -7,6 +7,7 @@ from jesterTOV import utils
 from jesterTOV.eos.base import Interpolate_EOS_model
 from jesterTOV.eos.crust import Crust, CRUST_DIR
 from jesterTOV.eos.metamodel import MetaModel_EOS_model, MetaModel_with_CSE_EOS_model
+from jesterTOV.eos.skyrme import Skyrme_EOS_model
 from jesterTOV.tov.gr import GRTOVSolver
 from jesterTOV.tov.data_classes import EOSData
 
@@ -272,6 +273,26 @@ class TestMetaModelEOSModel:
         assert jnp.all(eos_data.es > 0)  # Energy density should be positive
         assert jnp.all(eos_data.cs2 > 0)  # Speed of sound squared should be positive
         assert jnp.all(eos_data.cs2 <= 1.0)  # Should not exceed speed of light
+        assert "proton_fraction" in eos_data.extra_constraints
+        assert "muon_fraction" in eos_data.extra_constraints
+
+    def test_metamodel_construct_eos_return_extra_legacy_api(
+        self, metamodel_params, nep_dict
+    ):
+        """Test standalone MetaModel compatibility with the legacy notebook API."""
+        model = MetaModel_EOS_model(**metamodel_params)
+
+        result = model.construct_eos(
+            nep_dict,
+            jnp.array([0.3, 0.5]),
+            jnp.array([0.4, 0.5]),
+            return_extra=True,
+        )
+
+        assert isinstance(result, tuple)
+        assert len(result) == 8
+        assert "n_metamodel_orig" in result[-1]
+        assert "proton_fraction" in result[-1]
 
     def test_metamodel_auxiliary_functions(self, metamodel_params):
         """Test auxiliary functions in MetaModel."""
@@ -413,6 +434,62 @@ class TestMetaModelWithCSEEOSModel:
         assert jnp.all(eos_data.es > 0)
         assert jnp.all(eos_data.cs2 > 0)
         assert jnp.all(eos_data.cs2 <= 1.0)
+
+
+class TestSkyrmeEOSModel:
+    """Test Skyrme EOS functionality."""
+
+    @staticmethod
+    def _sample_params() -> dict[str, float]:
+        return {
+            "t2": 0.0653197680269105,
+            "t4": -393.95938126131114,
+            "x0": -0.5220046395768974,
+            "x1": 63.97673418075088,
+            "x4": -0.06647266088744885,
+            "alph": 0.08514875984757903,
+            "beta": 0.019629226545955426,
+            "gamma": 0.2650239864740867,
+            "kfsat": 1.3296560983138088,
+            "av": -16.14607403242108,
+            "J": 32.062082553105675,
+            "meffs": 0.7021275438323112,
+            "meffv": 0.9040752064991122,
+            "Kinf": 267.780792702404,
+            "eNMhd": 243.98249010800095,
+        }
+
+    def test_skyrme_construct_eos(self):
+        """Test standalone Skyrme EOS construction."""
+        model = Skyrme_EOS_model(ndat=8, proton_fraction="approx")
+        eos_data = model.construct_eos(self._sample_params())
+
+        assert len(eos_data.ns) > 0
+        assert len(eos_data.ps) == len(eos_data.ns)
+        assert len(eos_data.es) == len(eos_data.ns)
+        assert eos_data.mu is not None
+        assert len(eos_data.cs2) == len(eos_data.ns)
+        assert "proton_fraction" in eos_data.extra_constraints
+
+    def test_skyrme_construct_eos_accepts_cse_style_arguments(self):
+        """Test standalone Skyrme compatibility with the shared CSE call shape."""
+        model = Skyrme_EOS_model(ndat=8, proton_fraction="approx")
+
+        result = model.construct_eos(
+            self._sample_params(),
+            jnp.array([0.3, 0.5]),
+            jnp.array([0.4, 0.5]),
+            return_extra=True,
+        )
+
+        assert isinstance(result, tuple)
+        assert len(result) == 8
+        assert "n_Skyrme_orig" in result[-1]
+
+    def test_skyrme_required_parameters(self):
+        """Test Skyrme required parameter list."""
+        model = Skyrme_EOS_model(ndat=8, proton_fraction="approx")
+        assert set(model.get_required_parameters()) == set(self._sample_params())
 
 
 class TestConstructFamily:
