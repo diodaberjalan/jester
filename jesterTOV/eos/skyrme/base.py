@@ -401,7 +401,7 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
             z0 = jnp.array(guess_val_p(nb))
 
             # Use Newton with Dogleg fallback for robustness and speed
-            sol = optx.root_find(fn, optx.Newton(rtol=1e-5, atol=1e-6), z0, throw=False, max_steps=1000)
+            sol = optx.root_find(fn, optx.Newton(rtol=1e-5, atol=1e-6), z0, throw=False)
             return sol.value
 
         def betaHMnpemu_optimistix(nb):
@@ -419,7 +419,7 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
                 return f1, f2
             z0 = jnp.array([guess_val_p(nb), 1.0e-9])
             # Use Newton with Dogleg fallback for robustness and speed
-            sol = optx.root_find(fn, optx.Newton(rtol=1e-5, atol=1e-6), z0, throw=False, max_steps=1000)
+            sol = optx.root_find(fn, optx.Newton(rtol=1e-5, atol=1e-6), z0, throw=False)
             return sol.value
 
         @jax.jit
@@ -662,9 +662,11 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
         else:
             proton_fraction_arr = proton_fraction
 
-        # Compute cs2 including lepton contributions
+        # Compute cs2.  leptons are already included in p_total / e_total
+        # (computed above), so do NOT pass e_fraction here to avoid
+        # double-counting inside compute_cs2.
         cs2_Skyrme = self.compute_cs2(  # type: ignore[arg-type]
-            self.n_Skyrme, p_total, e_total, proton_fraction_arr, e_final_arr
+            self.n_Skyrme, p_total, e_total, proton_fraction_arr, e_fraction=None
         )
 
         # Spline for speed of sound for the connection region
