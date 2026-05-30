@@ -3,7 +3,7 @@
 from .combined import CombinedLikelihood, ZeroLikelihood
 from .gw import GWLikelihood, GWLikelihoodResampled
 from .nicer import NICERLikelihood
-from .radio import RadioTimingLikelihood
+from .radio import RadioTimingLikelihood, MaxMassBoundsLikelihood
 from .chieft import ChiEFTLikelihood
 from .rex import REXLikelihood
 from .constraints import (
@@ -20,6 +20,7 @@ __all__ = [
     "GWLikelihoodResampled",
     "NICERLikelihood",
     "RadioTimingLikelihood",
+    "MaxMassBoundsLikelihood",
     "ChiEFTLikelihood",
     "REXLikelihood",
     "ConstraintEOSLikelihood",

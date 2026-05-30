@@ -781,6 +781,84 @@ class REXLikelihoodConfig(BaseLikelihoodConfig):
         raise NotImplementedError("REX likelihood is not implemented")
 
 
+class MaxMassBoundsLikelihoodConfig(BaseLikelihoodConfig):
+    r"""Maximum mass bounds likelihood configuration.
+
+    Constrains the maximum TOV mass using combined lower bounds from heavy
+    pulsar mass measurements and an upper bound from multimessenger events
+    (e.g., GW170817). Based on Dietrich et al. (2020).
+
+    Examples
+    --------
+    .. code-block:: yaml
+
+        - type: "max_mass_bounds"
+          enabled: true
+          name: "Joint_Mass_Bounds"
+          lower_mean: [1.908, 2.01]
+          lower_std: [0.016, 0.04]
+          upper_mean: 2.16
+          upper_std: 0.17
+          m_min: 0.1
+          penalty_value: -1e5
+    """
+
+    type: Literal["max_mass_bounds"] = Field(
+        default="max_mass_bounds", description="Likelihood type identifier"
+    )
+
+    name: str = Field(
+        default="Joint_Mass_Bounds",
+        description="Identifier for this likelihood constraint",
+    )
+
+    lower_mean: list[float] = Field(
+        description="Mean masses of lower bound observations in solar masses"
+    )
+
+    lower_std: list[float] = Field(
+        description="1-sigma uncertainties of lower bound observations in solar masses"
+    )
+
+    upper_mean: float = Field(
+        description="Mean mass of the upper bound observation in solar masses"
+    )
+
+    upper_std: float = Field(
+        gt=0,
+        description="1-sigma uncertainty of the upper bound observation in solar masses",
+    )
+
+    m_min: float = Field(
+        default=0.1,
+        description=(
+            "Minimum mass for the integration lower bound in solar masses. "
+            "Should be well below any physical neutron star mass."
+        ),
+    )
+
+    penalty_value: float = Field(
+        default=-1e5,
+        description="Log-likelihood penalty for invalid TOV solutions (M_TOV ≤ m_min)",
+    )
+
+    @field_validator("lower_mean")
+    @classmethod
+    def _validate_lower_mean(cls, v: list[float]) -> list[float]:
+        if len(v) < 1:
+            raise ValueError("lower_mean must contain at least one value")
+        return v
+
+    @field_validator("lower_std")
+    @classmethod
+    def _validate_lower_std(cls, v: list[float]) -> list[float]:
+        if len(v) < 1:
+            raise ValueError("lower_std must contain at least one value")
+        if any(s <= 0 for s in v):
+            raise ValueError("All lower_std values must be positive")
+        return v
+
+
 class ZeroLikelihoodConfig(BaseLikelihoodConfig):
     """Zero likelihood configuration for prior-only sampling.
 
@@ -815,6 +893,7 @@ LikelihoodConfig = Annotated[
         GammaConstraintsLikelihoodConfig,
         DeprecatedConstraintsLikelihoodConfig,
         REXLikelihoodConfig,
+        MaxMassBoundsLikelihoodConfig,
         ZeroLikelihoodConfig,
     ],
     Discriminator("type"),
