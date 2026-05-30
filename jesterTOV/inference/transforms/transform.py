@@ -525,8 +525,16 @@ class JesterTransform(NtoMTransform):
         }
 
         # Add any extra constraint violations from EOS
+        # Flatten nested dicts (e.g., durca_density -> durca_density.ye, durca_density.ym, etc.)
+        # using dot notation to match the old HDF5 format (jester-EoS-dUrca-230326).
+        # JAX lax.map can flatten pytrees but NumPy/HDF5 cannot store nested dicts cleanly.
         if extra_constraints is not None:
-            result.update(extra_constraints)
+            for key, value in extra_constraints.items():
+                if isinstance(value, dict):
+                    for sub_key, sub_value in value.items():
+                        result[f"{key}.{sub_key}"] = sub_value
+                else:
+                    result[key] = value
 
         return result
 
