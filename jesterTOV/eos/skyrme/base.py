@@ -405,7 +405,7 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
             sol = optx.root_find(fn, optx.Newton(rtol=1e-5, atol=1e-6), z0, throw=False, max_steps=1000)
             return sol.value
 
-        def betaHMnpemu_optimistix(nb):
+        def betaHMnpemu_optimistix(nb, ye_guess):
             def fn(z, args):
                 y1, y2 = z
                 y = y1 + y2
@@ -418,7 +418,9 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
                 f1 = (mun - mup - mue)/mun
                 f2 = (mumu - mue)/mue
                 return f1, f2
-            z0 = jnp.array([guess_val_p(nb), 1.0e-9])
+            # Use the no-muon solution as the electron fraction initial guess
+            # (much better than the approximate guess when S(n) < 0 at high density)
+            z0 = jnp.array([ye_guess, 1.0e-9])
             # Use Newton with Dogleg fallback for robustness and speed
             sol = optx.root_find(fn, optx.Newton(rtol=1e-5, atol=1e-6), z0, throw=False, max_steps=1000)
             return sol.value
@@ -432,7 +434,7 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
             def compute_for_single(nb, has_muon, ye):
                 result = jax.lax.cond(
                     has_muon,
-                    lambda: betaHMnpemu_optimistix(nb),
+                    lambda: betaHMnpemu_optimistix(nb, ye),
                     lambda: jnp.array([ye, 0.0])
                 )
                 return result

@@ -977,7 +977,7 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
                 return jax.lax.cond(
                     has_muon,
                     lambda: beta_npemu(
-                        jnp.array([guess_val_p(nb), 1.0e-9]), nb
+                        jnp.array([ye, 1.0e-9]), nb
                     ),
                     lambda: jnp.array([ye, 0.0]),
                 )
