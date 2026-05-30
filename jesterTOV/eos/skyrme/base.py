@@ -694,7 +694,7 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
 
         # Build extra dict for backward compatibility when return_extra=True
         extra = {
-            "n_Skyrme_orig": self.n_Skyrme,
+            "n_orig": self.n_Skyrme,
             "proton_fraction": proton_fraction,
         }
         if self.with_muon and e_fraction is not None:

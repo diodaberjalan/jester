@@ -291,7 +291,7 @@ class TestMetaModelEOSModel:
 
         assert isinstance(result, tuple)
         assert len(result) == 8
-        assert "n_metamodel_orig" in result[-1]
+        assert "n_orig" in result[-1]
         assert "proton_fraction" in result[-1]
 
     def test_metamodel_auxiliary_functions(self, metamodel_params):
@@ -484,7 +484,7 @@ class TestSkyrmeEOSModel:
 
         assert isinstance(result, tuple)
         assert len(result) == 8
-        assert "n_Skyrme_orig" in result[-1]
+        assert "n_orig" in result[-1]
 
     def test_skyrme_required_parameters(self):
         """Test Skyrme required parameter list."""

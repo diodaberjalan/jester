@@ -368,7 +368,7 @@ class InferenceResult:
             "logpc_EOS", "n", "p", "e", "h", "cs2", "dloge_dlogp", "n_TOV",
             "n_tov_failures", "n_causality_violations",
             "n_stability_violations", "n_pressure_violations",
-            "n_esym_violations", "n_metamodel_orig", "n_Skyrme_orig", "n_gamma_violations",
+            "n_esym_violations", "n_orig", "n_gamma_violations",
             "proton_fraction", "e_fraction", "muon_fraction",
             "durca_density.ye", "durca_density.ym", "durca_density.nb_durca",
         }

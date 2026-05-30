@@ -473,7 +473,7 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
         n_esym_violations = jnp.sum(esym_vals < 0.0)
         extra_constraints = {
             "n_esym_violations": n_esym_violations,
-            "n_metamodel_orig": self.n_metamodel,
+            "n_orig": self.n_metamodel,
             "proton_fraction": proton_fraction,
             "e_fraction": e_fraction,
             "muon_fraction": muon_fraction,
