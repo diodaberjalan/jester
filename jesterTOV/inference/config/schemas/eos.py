@@ -181,7 +181,7 @@ class BaseSkyrmeEOSConfig(BaseEOSConfig):
 class SkyrmeEOSConfig(BaseSkyrmeEOSConfig):
     r"""Configuration for standalone Skyrme EOS."""
 
-    type: Literal["skyrme", "skyrme_only", "skryme_only"] = "skyrme"
+    type: Literal["skyrme", "skyrme_only"] = "skyrme"
     nb_CSE: int = 0
 
     @field_validator("nb_CSE")

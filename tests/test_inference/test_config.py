@@ -53,11 +53,9 @@ class TestEOSConfig:
         """Test standalone EOS aliases."""
         metamodel = schema.MetamodelEOSConfig(type="metamodel_only")
         skyrme = schema.SkyrmeEOSConfig(type="skyrme_only")
-        skryme = schema.SkyrmeEOSConfig(type="skryme_only")
 
         assert metamodel.type == "metamodel_only"
         assert skyrme.type == "skyrme_only"
-        assert skryme.type == "skryme_only"
         assert skyrme.nb_CSE == 0
 
     def test_valid_skyrme_cse_config(self):
