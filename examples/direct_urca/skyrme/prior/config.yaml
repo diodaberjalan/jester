@@ -20,17 +20,16 @@ prior:
   specification_file: "prior.prior"
 
 likelihoods:
-- type: constraints_eos
-  enabled: true
 - type: zero
   enabled: true
 sampler:
-  type: "smc-rw"
-  n_particles: 1000
+  type: smc-rw
+  n_particles: 50000
   n_mcmc_steps: 10
   target_ess: 0.9
   random_walk_sigma: 0.1
-  output_dir: "./outdir/"
+  n_eos_samples: 50000
+  output_dir: ./outdir/
 
 postprocessing:
   enabled: true
