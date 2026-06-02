@@ -62,6 +62,7 @@ from .schemas.likelihoods import (
     DeprecatedConstraintsLikelihoodConfig,
     REXLikelihoodConfig,
     MaxMassBoundsLikelihoodConfig,
+    DirectUrcaLikelihoodConfig,
     ZeroLikelihoodConfig,
     LikelihoodConfig,
 )
@@ -263,6 +264,7 @@ __all__ = [
     "DeprecatedConstraintsLikelihoodConfig",
     "REXLikelihoodConfig",
     "MaxMassBoundsLikelihoodConfig",
+    "DirectUrcaLikelihoodConfig",
     "ZeroLikelihoodConfig",
     "LikelihoodConfig",
     # Samplers

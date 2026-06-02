@@ -859,6 +859,62 @@ class MaxMassBoundsLikelihoodConfig(BaseLikelihoodConfig):
         return v
 
 
+class DirectUrcaLikelihoodConfig(BaseLikelihoodConfig):
+    r"""Direct Urca likelihood configuration.
+
+    Penalises EOS configurations where direct Urca is NOT active at a chosen
+    reference density.  The user specifies which density to check and a
+    configurable reference mass.
+
+    Examples
+    --------
+    .. code-block:: yaml
+
+        - type: "direct_urca"
+          enabled: true
+          check_type: "n_reference"      # central density at reference mass
+          reference_mass: 1.4             # :math:`M_{\odot}` (configurable)
+          penalty_value: -1e5
+
+    .. code-block:: yaml
+
+        - type: "direct_urca"
+          enabled: true
+          check_type: "n_TOV"            # central density at M_TOV
+          penalty_value: -1e5
+    """
+
+    type: Literal["direct_urca"] = Field(
+        default="direct_urca", description="Likelihood type identifier"
+    )
+
+    check_type: Literal["n_reference", "n_TOV"] = Field(
+        default="n_reference",
+        description=(
+            "Which density to check: 'n_reference' = central density of a star "
+            "with mass = reference_mass; 'n_TOV' = central density of the "
+            "maximum-mass star."
+        ),
+    )
+
+    reference_mass: float = Field(
+        default=1.4,
+        ge=0.1,
+        description=(
+            "Stellar mass in M_sun at which to evaluate when "
+            "check_type='n_reference' (default: 1.4)."
+        ),
+    )
+
+    penalty_value: float = Field(
+        default=-1e5,
+        description=(
+            "Log-likelihood penalty returned when Y_p < X_DU at the target "
+            "density (default: -1e5)."
+        ),
+    )
+
+
 class ZeroLikelihoodConfig(BaseLikelihoodConfig):
     """Zero likelihood configuration for prior-only sampling.
 
@@ -894,6 +950,7 @@ LikelihoodConfig = Annotated[
         DeprecatedConstraintsLikelihoodConfig,
         REXLikelihoodConfig,
         MaxMassBoundsLikelihoodConfig,
+        DirectUrcaLikelihoodConfig,
         ZeroLikelihoodConfig,
     ],
     Discriminator("type"),

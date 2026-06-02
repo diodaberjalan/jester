@@ -6,6 +6,7 @@ from .nicer import NICERLikelihood
 from .radio import RadioTimingLikelihood, MaxMassBoundsLikelihood
 from .chieft import ChiEFTLikelihood
 from .rex import REXLikelihood
+from .direct_urca import DirectUrcaLikelihood
 from .constraints import (
     ConstraintEOSLikelihood,
     ConstraintTOVLikelihood,
@@ -23,6 +24,7 @@ __all__ = [
     "MaxMassBoundsLikelihood",
     "ChiEFTLikelihood",
     "REXLikelihood",
+    "DirectUrcaLikelihood",
     "ConstraintEOSLikelihood",
     "ConstraintTOVLikelihood",
     "ConstraintGammaLikelihood",
