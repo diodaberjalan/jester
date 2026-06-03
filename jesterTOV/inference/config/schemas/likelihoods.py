@@ -897,6 +897,17 @@ class DirectUrcaLikelihoodConfig(BaseLikelihoodConfig):
         ),
     )
 
+    constraint_type: Literal["none", "n_tov", "n_break"] = Field(
+        default="none",
+        description=(
+            "Additional compatibility constraint on n_durca (the density where "
+            "Yp first reaches X_DU).  'n_tov': n_durca < n_TOV (recommended for "
+            "non-CSE models).  'n_break': n_durca < n_break (recommended for "
+            "CSE models where nbreak is available).  'none': no additional "
+            "constraint (default, backward compatible)."
+        ),
+    )
+
     reference_mass: float = Field(
         default=1.4,
         ge=0.1,

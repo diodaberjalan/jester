@@ -104,6 +104,41 @@ class MetamodelCSEEOSConfig(BaseMetamodelEOSConfig):
         return v
 
 
+class MetamodelAdaptiveCSEEOSConfig(BaseMetamodelEOSConfig):
+    """Configuration for MetaModel with adaptive CSE extension.
+
+    In the adaptive CSE variant, ``nbreak`` is **not** a free parameter —
+    it is determined automatically as the first density where the base
+    meta-model's :math:`c_s^2` reaches or exceeds ``cs2_threshold``.
+
+    Attributes
+    ----------
+    type : Literal["metamodel_adaptive_cse"]
+        EOS type identifier
+    nb_CSE : int
+        Number of CSE parameters (must be > 0, typically 4-8)
+    ndat_CSE : int
+        Number of density grid points for the CSE region (default: 100)
+    cs2_threshold : float
+        Speed-of-sound squared threshold for automatic ``nbreak``
+        detection (default: 0.95).
+    """
+
+    type: Literal["metamodel_adaptive_cse"] = "metamodel_adaptive_cse"
+    nb_CSE: int = 8
+    ndat_CSE: int = 100
+    cs2_threshold: float = 0.95
+
+    @field_validator("nb_CSE")
+    @classmethod
+    def _validate_nb_cse(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError(
+                "nb_CSE must be > 0 for type='metamodel_adaptive_cse'."
+            )
+        return v
+
+
 class MetamodelPeakCSEEOSConfig(BaseMetamodelEOSConfig):
     """Configuration for MetaModel with peakCSE extension.
 
@@ -214,6 +249,41 @@ class SkyrmeCSEEOSConfig(BaseSkyrmeEOSConfig):
         return v
 
 
+class SkyrmeAdaptiveCSEEOSConfig(BaseSkyrmeEOSConfig):
+    r"""Configuration for Skyrme EOS with adaptive CSE extension.
+
+    In the adaptive CSE variant, ``nbreak`` is **not** a free parameter —
+    it is determined automatically as the first density where the base
+    Skyrme EOS's :math:`c_s^2` reaches or exceeds ``cs2_threshold``.
+
+    Attributes
+    ----------
+    type : Literal["skyrme_adaptive_cse"]
+        EOS type identifier
+    nb_CSE : int
+        Number of CSE parameters (must be > 0, typically 4-8)
+    ndat_CSE : int
+        Number of density grid points for the CSE region (default: 100)
+    cs2_threshold : float
+        Speed-of-sound squared threshold for automatic ``nbreak``
+        detection (default: 0.95).
+    """
+
+    type: Literal["skyrme_adaptive_cse"] = "skyrme_adaptive_cse"
+    nb_CSE: int = 8
+    ndat_CSE: int = 100
+    cs2_threshold: float = 0.95
+
+    @field_validator("nb_CSE")
+    @classmethod
+    def _validate_nb_cse(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError(
+                "nb_CSE must be > 0 for type='skyrme_adaptive_cse'."
+            )
+        return v
+
+
 class SkyrmePeakCSEEOSConfig(BaseSkyrmeEOSConfig):
     r"""Configuration for Skyrme EOS with peakCSE extension."""
 
@@ -227,10 +297,12 @@ EOSConfig = Annotated[
     Union[
         MetamodelEOSConfig,
         MetamodelCSEEOSConfig,
+        MetamodelAdaptiveCSEEOSConfig,
         MetamodelPeakCSEEOSConfig,
         SpectralEOSConfig,
         SkyrmeEOSConfig,
         SkyrmeCSEEOSConfig,
+        SkyrmeAdaptiveCSEEOSConfig,
         SkyrmePeakCSEEOSConfig,
     ],
     Discriminator("type"),

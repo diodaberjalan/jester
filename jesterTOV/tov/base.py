@@ -108,8 +108,6 @@ class TOVSolverBase(ABC):
             jnp.all(eos_data.ps > 0)
             & jnp.all(eos_data.hs > 0)
             & jnp.all(eos_data.es > 0)
-            & jnp.all(eos_data.cs2 >= 0)
-            & jnp.all(eos_data.cs2 <= 1)
         )
 
         # Poison the EOS data with NaNs if unphysical

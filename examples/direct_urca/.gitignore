@@ -1,0 +1,6 @@
+outdir/
+*.h5
+*.pdf
+*.png
+untitled.txt
+.ipynb_checkpoints/

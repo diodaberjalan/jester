@@ -51,6 +51,14 @@ class DirectUrcaLikelihood(LikelihoodBase):
         Which reference density to check:
         - ``"n_reference"``: central density of a star with mass = ``reference_mass``
         - ``"n_TOV"``: central density of the maximum-mass star
+    constraint_type : str, optional
+        Additional compatibility constraint on ``n_durca`` (the density where
+        :math:`Y_p` first reaches :math:`X_{\rm DU}`):
+
+        - ``"none"``: no additional constraint (default, backward compatible).
+        - ``"n_tov"``: require ``n_durca < n_TOV`` (recommended for non-CSE models).
+        - ``"n_break"``: require ``n_durca < n_break`` (recommended for CSE models
+          where ``nbreak`` is available from the EOS).
     reference_mass : float, optional
         Stellar mass in :math:`M_{\odot}` at which to evaluate when
         ``check_type="n_reference"`` (default: 1.4).
@@ -77,17 +85,20 @@ class DirectUrcaLikelihood(LikelihoodBase):
     """
 
     check_type: str
+    constraint_type: str
     reference_mass: float
     penalty_value: float
 
     def __init__(
         self,
         check_type: str = "n_reference",
+        constraint_type: str = "none",
         reference_mass: float = 1.4,
         penalty_value: float = -1e5,
     ) -> None:
         super().__init__()
         self.check_type = check_type
+        self.constraint_type = constraint_type
         self.reference_mass = reference_mass
         self.penalty_value = float(penalty_value)
 
@@ -136,7 +147,10 @@ class DirectUrcaLikelihood(LikelihoodBase):
         r"""Evaluate the direct Urca log-likelihood.
 
         Returns 0.0 if :math:`Y_p \ge X_{\rm DU}` at the target density, or
-        ``penalty_value`` otherwise.
+        ``penalty_value`` otherwise.  When ``constraint_type != "none"``, an
+        additional penalty is applied if the onset density of direct Urca
+        (the first point where :math:`Y_p \ge X_{\rm DU}`) violates the
+        chosen bound (``n_TOV`` or ``n_break``).
 
         Parameters
         ----------
@@ -154,13 +168,18 @@ class DirectUrcaLikelihood(LikelihoodBase):
             - ``"e_fraction"``: electron fraction (if available)
             - ``"muon_fraction"``: muon fraction (if available)
             - ``"n_TOV"``: central density at M\ :sub:`TOV` (geometric, only
-              needed for ``check_type="n_TOV"``)
+              needed for ``check_type="n_TOV"`` or
+              ``constraint_type="n_tov"``)
+            - ``"nbreak"``: break density in fm\ :sup:`-3` (only needed for
+              ``constraint_type="n_break"``; available from CSE prior param
+              or adaptive-CSE extra\_constraints)
 
         Returns
         -------
         Float
-            0.0 if direct Urca is active at the target density, else
-            ``penalty_value``.
+            0.0 if direct Urca is active at the target density and the
+            constraint (if any) is satisfied, or ``penalty_value`` (possibly
+            :math:`\times 2` if both conditions fail).
         """
         # Extract arrays from params
         proton_fraction: Float[Array, " n"] = params["proton_fraction"]
@@ -209,6 +228,49 @@ class DirectUrcaLikelihood(LikelihoodBase):
             0.0,  # Direct Urca active → no penalty
             self.penalty_value,  # Direct Urca inactive → apply penalty
         )
+
+        # =====================================================================
+        # Additional constraint on the direct Urca onset density (n_durca)
+        # =====================================================================
+        if self.constraint_type != "none":
+            # n_durca: first density where Yp >= X_DU (in fm^-3)
+            yp_active: Float[Array, " n"] = proton_fraction >= xdu
+            first_idx: Float = jnp.argmax(yp_active)  # 0 if all-False
+            n_durca: Float = jnp.where(
+                jnp.any(yp_active),
+                n_orig[first_idx],
+                jnp.inf,  # never crosses → infinite penalty bound
+            )
+
+            n_tov_fm3: Float = (
+                params["n_TOV"] * utils.geometric_to_fm_inv3  # type: ignore[assignment]
+            )
+
+            if self.constraint_type == "n_tov":
+                # Penalise if n_durca is at or above n_TOV
+                log_likelihood = log_likelihood + jnp.where(
+                    n_durca >= n_tov_fm3,
+                    self.penalty_value,
+                    0.0,
+                )
+
+            elif self.constraint_type == "n_break":
+                # nbreak is expected in fm^-3 from the EOS or prior
+                nbreak: Float = params["nbreak"]  # type: ignore[assignment]
+                log_likelihood = log_likelihood + jnp.where(
+                    n_durca >= nbreak,
+                    # n_durca < nbreak is the desired physical behaviour:
+                    # the CSE extension should begin before (or at) the
+                    # density where Urca turns on.
+                    self.penalty_value,
+                    0.0,
+                )
+
+            else:
+                raise ValueError(
+                    f"Unknown constraint_type: '{self.constraint_type}'. "
+                    "Expected 'none', 'n_tov', or 'n_break'."
+                )
 
         # Safety net for NaN from interpolation (e.g., target outside grid)
         log_likelihood = jnp.nan_to_num(

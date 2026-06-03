@@ -10,11 +10,13 @@ from jesterTOV.eos.metamodel import (
     MetaModel_EOS_model,
     MetaModel_with_CSE_EOS_model,
     MetaModel_with_peakCSE_EOS_model,
+    MetaModel_with_AdaptiveCSE_EOS_model,
 )
 from jesterTOV.eos.skyrme import (
     Skyrme_EOS_model,
     Skyrme_with_CSE_EOS_model,
     Skyrme_with_peakCSE_EOS_model,
+    Skyrme_with_AdaptiveCSE_EOS_model,
 )
 from jesterTOV.eos.spectral import SpectralDecomposition_EOS_model
 from jesterTOV.tov.base import TOVSolverBase
@@ -24,10 +26,12 @@ from jesterTOV.inference.config.schema import (
     BaseEOSConfig,
     MetamodelEOSConfig,
     MetamodelCSEEOSConfig,
+    MetamodelAdaptiveCSEEOSConfig,
     MetamodelPeakCSEEOSConfig,
     SpectralEOSConfig,
     SkyrmeEOSConfig,
     SkyrmeCSEEOSConfig,
+    SkyrmeAdaptiveCSEEOSConfig,
     SkyrmePeakCSEEOSConfig,
     BaseTOVConfig,
     GRTOVConfig,
@@ -263,6 +267,20 @@ class JesterTransform(NtoMTransform):
                 calculate_durca=config.calculate_durca,
             )
 
+        elif isinstance(config, MetamodelAdaptiveCSEEOSConfig):
+            return MetaModel_with_AdaptiveCSE_EOS_model(
+                nsat=0.16,
+                nmin_MM_nsat=config.nmin_MM_nsat,
+                nmax_nsat=config.nmax_nsat,
+                ndat_metamodel=config.ndat_metamodel,
+                ndat_CSE=config.ndat_CSE,
+                nb_CSE=config.nb_CSE,
+                cs2_threshold=config.cs2_threshold,
+                crust_name=config.crust_name,
+                proton_fraction=config.proton_fraction,
+                calculate_durca=config.calculate_durca,
+            )
+
         elif isinstance(config, MetamodelPeakCSEEOSConfig):
             return MetaModel_with_peakCSE_EOS_model(
                 nsat=0.16,
@@ -304,6 +322,20 @@ class JesterTransform(NtoMTransform):
                 ndat_skyrme=config.ndat_skyrme,
                 ndat_CSE=config.ndat_CSE,
                 nb_CSE=config.nb_CSE,
+                crust_name=config.crust_name,
+                proton_fraction=config.proton_fraction,
+                calculate_durca=config.calculate_durca,
+            )
+
+        elif isinstance(config, SkyrmeAdaptiveCSEEOSConfig):
+            return Skyrme_with_AdaptiveCSE_EOS_model(
+                nsat=0.16,
+                nmin_Skyrme_nsat=config.nmin_Skyrme_nsat,
+                nmax_nsat=config.nmax_nsat,
+                ndat_skyrme=config.ndat_skyrme,
+                ndat_CSE=config.ndat_CSE,
+                nb_CSE=config.nb_CSE,
+                cs2_threshold=config.cs2_threshold,
                 crust_name=config.crust_name,
                 proton_fraction=config.proton_fraction,
                 calculate_durca=config.calculate_durca,
