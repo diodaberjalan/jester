@@ -1,4 +1,6 @@
 .vscode
+/examples/ST_runs/
+/examples/direct_urca/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
