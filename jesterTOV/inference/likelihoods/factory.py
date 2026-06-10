@@ -18,12 +18,15 @@ from ..config.schema import (
     DeprecatedConstraintsLikelihoodConfig,
     REXLikelihoodConfig,
     ZeroLikelihoodConfig,
+    MaxMassBoundsLikelihoodConfig,
+    DirectUrcaLikelihoodConfig,
 )
 from .combined import CombinedLikelihood, ZeroLikelihood
 from .gw import GWLikelihood, GWLikelihoodResampled
 from .nicer import NICERLikelihood, NICERKDELikelihood
-from .radio import RadioTimingLikelihood
+from .radio import RadioTimingLikelihood, MaxMassBoundsLikelihood
 from .chieft import ChiEFTLikelihood
+from .direct_urca import DirectUrcaLikelihood
 from .constraints import (
     ConstraintEOSLikelihood,
     ConstraintTOVLikelihood,
@@ -191,6 +194,25 @@ def create_likelihood(
                 penalty_tov=config.penalty_tov,
             )
             return CombinedLikelihood([eos_constraint, tov_constraint])
+
+        case MaxMassBoundsLikelihoodConfig():
+            return MaxMassBoundsLikelihood(
+                name=config.name,
+                lower_mean=config.lower_mean,
+                lower_std=config.lower_std,
+                upper_mean=config.upper_mean,
+                upper_std=config.upper_std,
+                m_min=config.m_min,
+                penalty_value=config.penalty_value,
+            )
+
+        case DirectUrcaLikelihoodConfig():
+            return DirectUrcaLikelihood(
+                check_type=config.check_type,
+                constraint_type=config.constraint_type,
+                reference_mass=config.reference_mass,
+                penalty_value=config.penalty_value,
+            )
 
         case ZeroLikelihoodConfig():
             return ZeroLikelihood()

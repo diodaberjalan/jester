@@ -9,6 +9,7 @@ calculations needed for TOV equation solving.
 systems commonly used in neutron star physics.
 """
 
+import jax
 from jax import vmap
 import jax.numpy as jnp
 from functools import partial
@@ -32,6 +33,7 @@ hbarc = 197.3269804593025  # Reduced Planck constant × c [MeV⋅fm]
 m_p = 938.2720881604904  # Proton mass
 m_n = 939.5654205203889  # Neutron mass
 m_e = 0.510998  # Electron mass
+m_mu = 105.6584  # Muon mass
 m = (m_p + m_n) / 2.0  # Average nucleon mass (Margueron et al.)
 
 # Derived constants
@@ -431,3 +433,26 @@ def locate_lowest_non_causal_point(cs2: Float[Array, "n"]) -> Int[Array, ""]:
     masked_indices = jnp.where(mask, indices, len(cs2))
     first_index = jnp.min(masked_indices)
     return jnp.where(any_ones, first_index, -1)
+
+
+@jax.jit
+def get_curve_intersection(c1: Array, c2: Array) -> Array:
+    """Find the first intersection between two curves stored as ``(2, N)`` arrays."""
+    x1, y1 = c1[0], c1[1]
+    x2, y2 = c2[0], c2[1]
+
+    y2_interp = jnp.interp(x1, x2, y2, left=jnp.nan, right=jnp.nan)
+    diff = y1 - y2_interp
+    is_crossing = (diff[:-1] * diff[1:]) <= 0
+    idx = jnp.argmax(is_crossing)
+    exists = is_crossing[idx]
+
+    x_i, x_next = x1[idx], x1[idx + 1]
+    h_i, h_next = diff[idx], diff[idx + 1]
+    delta_x = x_next - x_i
+    delta_h = h_next - h_i
+
+    x_int = x_i - h_i * (delta_x / (delta_h + 1e-12))
+    y_int = y1[idx] + (y1[idx + 1] - y1[idx]) * (x_int - x_i) / delta_x
+
+    return jnp.where(exists, jnp.array([x_int, y_int]), jnp.array([jnp.nan, jnp.nan]))

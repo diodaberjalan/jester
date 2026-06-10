@@ -1,4 +1,8 @@
 .vscode
+/examples/ST_runs/
+/examples/direct_urca/
+/outdir/
+*.h5
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

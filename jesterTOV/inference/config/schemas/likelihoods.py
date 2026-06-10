@@ -781,6 +781,151 @@ class REXLikelihoodConfig(BaseLikelihoodConfig):
         raise NotImplementedError("REX likelihood is not implemented")
 
 
+class MaxMassBoundsLikelihoodConfig(BaseLikelihoodConfig):
+    r"""Maximum mass bounds likelihood configuration.
+
+    Constrains the maximum TOV mass using combined lower bounds from heavy
+    pulsar mass measurements and an upper bound from multimessenger events
+    (e.g., GW170817). Based on Dietrich et al. (2020).
+
+    Examples
+    --------
+    .. code-block:: yaml
+
+        - type: "max_mass_bounds"
+          enabled: true
+          name: "Joint_Mass_Bounds"
+          lower_mean: [1.908, 2.01]
+          lower_std: [0.016, 0.04]
+          upper_mean: 2.16
+          upper_std: 0.17
+          m_min: 0.1
+          penalty_value: -1e5
+    """
+
+    type: Literal["max_mass_bounds"] = Field(
+        default="max_mass_bounds", description="Likelihood type identifier"
+    )
+
+    name: str = Field(
+        default="Joint_Mass_Bounds",
+        description="Identifier for this likelihood constraint",
+    )
+
+    lower_mean: list[float] = Field(
+        description="Mean masses of lower bound observations in solar masses"
+    )
+
+    lower_std: list[float] = Field(
+        description="1-sigma uncertainties of lower bound observations in solar masses"
+    )
+
+    upper_mean: float = Field(
+        description="Mean mass of the upper bound observation in solar masses"
+    )
+
+    upper_std: float = Field(
+        gt=0,
+        description="1-sigma uncertainty of the upper bound observation in solar masses",
+    )
+
+    m_min: float = Field(
+        default=0.1,
+        description=(
+            "Minimum mass for the integration lower bound in solar masses. "
+            "Should be well below any physical neutron star mass."
+        ),
+    )
+
+    penalty_value: float = Field(
+        default=-1e5,
+        description="Log-likelihood penalty for invalid TOV solutions (M_TOV ≤ m_min)",
+    )
+
+    @field_validator("lower_mean")
+    @classmethod
+    def _validate_lower_mean(cls, v: list[float]) -> list[float]:
+        if len(v) < 1:
+            raise ValueError("lower_mean must contain at least one value")
+        return v
+
+    @field_validator("lower_std")
+    @classmethod
+    def _validate_lower_std(cls, v: list[float]) -> list[float]:
+        if len(v) < 1:
+            raise ValueError("lower_std must contain at least one value")
+        if any(s <= 0 for s in v):
+            raise ValueError("All lower_std values must be positive")
+        return v
+
+
+class DirectUrcaLikelihoodConfig(BaseLikelihoodConfig):
+    r"""Direct Urca likelihood configuration.
+
+    Penalises EOS configurations where direct Urca is NOT active at a chosen
+    reference density.  The user specifies which density to check and a
+    configurable reference mass.
+
+    Examples
+    --------
+    .. code-block:: yaml
+
+        - type: "direct_urca"
+          enabled: true
+          check_type: "n_reference"      # central density at reference mass
+          reference_mass: 1.4             # :math:`M_{\odot}` (configurable)
+          penalty_value: -1e5
+
+    .. code-block:: yaml
+
+        - type: "direct_urca"
+          enabled: true
+          check_type: "n_TOV"            # central density at M_TOV
+          penalty_value: -1e5
+    """
+
+    type: Literal["direct_urca"] = Field(
+        default="direct_urca", description="Likelihood type identifier"
+    )
+
+    check_type: Literal["n_reference", "n_TOV"] = Field(
+        default="n_reference",
+        description=(
+            "Which density to check: 'n_reference' = central density of a star "
+            "with mass = reference_mass; 'n_TOV' = central density of the "
+            "maximum-mass star."
+        ),
+    )
+
+    constraint_type: Literal["none", "n_tov", "n_break"] = Field(
+        default="none",
+        description=(
+            "Additional compatibility constraint on n_durca (the density where "
+            "Yp first reaches X_DU).  'n_tov': n_durca < n_TOV (recommended for "
+            "non-CSE models).  'n_break': n_durca < n_break (recommended for "
+            "CSE models where nbreak is available).  'none': no additional "
+            "constraint (default, backward compatible)."
+        ),
+    )
+
+    reference_mass: float = Field(
+        default=1.4,
+        ge=0.1,
+        description=(
+            "Stellar mass in M_sun at which to evaluate when "
+            "check_type='n_reference' (default: 1.4)."
+        ),
+    )
+
+    penalty_value: float = Field(
+        default=-1e5,
+        description=(
+            "Log-likelihood penalty returned when Y_p < X_DU at the target "
+            "density (default: -1e5)."
+        ),
+    )
+
+
 class ZeroLikelihoodConfig(BaseLikelihoodConfig):
     """Zero likelihood configuration for prior-only sampling.
 
@@ -815,6 +960,8 @@ LikelihoodConfig = Annotated[
         GammaConstraintsLikelihoodConfig,
         DeprecatedConstraintsLikelihoodConfig,
         REXLikelihoodConfig,
+        MaxMassBoundsLikelihoodConfig,
+        DirectUrcaLikelihoodConfig,
         ZeroLikelihoodConfig,
     ],
     Discriminator("type"),
