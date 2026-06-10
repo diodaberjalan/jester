@@ -108,8 +108,6 @@ class TOVSolverBase(ABC):
             jnp.all(eos_data.ps > 0)
             & jnp.all(eos_data.hs > 0)
             & jnp.all(eos_data.es > 0)
-            & jnp.all(eos_data.cs2 >= 0)
-            & jnp.all(eos_data.cs2 <= 1)
         )
 
         # Poison the EOS data with NaNs if unphysical
@@ -165,7 +163,7 @@ class TOVSolverBase(ABC):
             Scalar Array: Maximum central pressure [geometric units]
         """
         # Find first non-causal point
-        mask = eos_data.cs2 >= 1.0
+        mask = (eos_data.cs2 >= 1.0) | (eos_data.cs2 <= 0.0)
         any_noncausal = jnp.any(mask)
         indices = jnp.arange(len(eos_data.cs2))
         masked_indices = jnp.where(mask, indices, len(eos_data.cs2))

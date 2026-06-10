@@ -21,7 +21,7 @@ from jesterTOV.inference.likelihoods.constraints import (
     check_gamma_bounds,
 )
 from jesterTOV.inference.likelihoods.chieft import ChiEFTLikelihood
-from jesterTOV.inference.likelihoods.radio import RadioTimingLikelihood
+from jesterTOV.inference.likelihoods.radio import RadioTimingLikelihood, MaxMassBoundsLikelihood
 from jesterTOV.inference.base import LikelihoodBase
 
 
@@ -583,6 +583,180 @@ class TestRadioTimingLikelihood:
         # For a stiff EOS with max mass > 2.01, likelihood should be reasonable
         # (not a large negative penalty)
         assert result > -1000.0, f"Likelihood too negative: {result}"
+
+
+class TestMaxMassBoundsLikelihood:
+    """Test MaxMassBoundsLikelihood functionality."""
+
+    def test_max_mass_bounds_initialization(self):
+        """Test MaxMassBoundsLikelihood initializes correctly."""
+        likelihood = MaxMassBoundsLikelihood(
+            name="Joint_Mass_Bounds",
+            lower_mean=[1.908, 2.01],
+            lower_std=[0.016, 0.04],
+            upper_mean=2.16,
+            upper_std=0.17,
+        )
+
+        assert likelihood.name == "Joint_Mass_Bounds"
+        assert jnp.allclose(likelihood.lower_mean, jnp.array([1.908, 2.01]))
+        assert jnp.allclose(likelihood.lower_std, jnp.array([0.016, 0.04]))
+        assert likelihood.upper_mean == 2.16
+        assert likelihood.upper_std == 0.17
+        assert likelihood.m_min == 0.1
+        assert likelihood.penalty_value == -1e5
+
+    def test_max_mass_bounds_evaluate_valid(self):
+        """Test evaluation with a valid M_TOV between bounds."""
+        likelihood = MaxMassBoundsLikelihood(
+            name="Test",
+            lower_mean=[1.908, 2.01],
+            lower_std=[0.016, 0.04],
+            upper_mean=2.16,
+            upper_std=0.17,
+        )
+
+        # M_TOV=2.10: above lower bounds (1.908, 2.01), below upper (2.16)
+        params = {"masses_EOS": jnp.linspace(1.0, 2.10, 50)}
+        result = likelihood.evaluate(params)
+
+        assert jnp.isfinite(result)
+        assert result > -10.0, f"Likelihood too negative: {result}"
+
+    def test_max_mass_bounds_evaluate_above_upper(self):
+        """Test evaluation when M_TOV exceeds the upper bound."""
+        likelihood = MaxMassBoundsLikelihood(
+            name="Test",
+            lower_mean=[1.908, 2.01],
+            lower_std=[0.016, 0.04],
+            upper_mean=2.16,
+            upper_std=0.17,
+        )
+
+        # M_TOV=2.5: above both lower bounds and upper bound
+        params = {"masses_EOS": jnp.linspace(0.5, 2.5, 50)}
+        result = likelihood.evaluate(params)
+
+        assert jnp.isfinite(result)
+        # Should be penalized for exceeding upper bound
+        assert result < 0.0
+
+    def test_max_mass_bounds_evaluate_below_lower(self):
+        """Test evaluation when M_TOV is below lower pulsar bounds."""
+        likelihood = MaxMassBoundsLikelihood(
+            name="Test",
+            lower_mean=[1.908, 2.01],
+            lower_std=[0.016, 0.04],
+            upper_mean=2.16,
+            upper_std=0.17,
+        )
+
+        # M_TOV=1.5: below both lower bounds
+        params = {"masses_EOS": jnp.linspace(0.5, 1.5, 50)}
+        result = likelihood.evaluate(params)
+
+        assert jnp.isfinite(result)
+        # Heavy penalty for not satisfying lower mass bounds
+        assert result < -100.0
+
+    def test_max_mass_bounds_evaluate_invalid_mtov(self):
+        """Test evaluation with invalid M_TOV (below m_min)."""
+        likelihood = MaxMassBoundsLikelihood(
+            name="Test",
+            lower_mean=[1.908],
+            lower_std=[0.016],
+            upper_mean=2.16,
+            upper_std=0.17,
+        )
+
+        # M_TOV below m_min (0.1)
+        params = {"masses_EOS": jnp.array([0.01, 0.02, 0.05])}
+        result = likelihood.evaluate(params)
+
+        assert jnp.isfinite(result)
+        assert result == likelihood.penalty_value
+
+    def test_max_mass_bounds_single_lower_bound(self):
+        """Test with a single lower bound (not as list)."""
+        likelihood = MaxMassBoundsLikelihood(
+            name="Test",
+            lower_mean=[2.08],
+            lower_std=[0.07],
+            upper_mean=2.3,
+            upper_std=0.1,
+        )
+
+        params = {"masses_EOS": jnp.linspace(1.0, 2.15, 50)}
+        result = likelihood.evaluate(params)
+
+        assert jnp.isfinite(result)
+        assert result > -10.0
+
+    def test_max_mass_bounds_config_validation(self):
+        """Test MaxMassBoundsLikelihoodConfig validates correctly."""
+        config = schema.MaxMassBoundsLikelihoodConfig(
+            type="max_mass_bounds",
+            name="Test",
+            lower_mean=[1.908, 2.01],
+            lower_std=[0.016, 0.04],
+            upper_mean=2.16,
+            upper_std=0.17,
+        )
+        assert config.type == "max_mass_bounds"
+        assert config.lower_mean == [1.908, 2.01]
+
+    def test_max_mass_bounds_config_empty_lower_mean(self):
+        """Test config validation rejects empty lower_mean."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            schema.MaxMassBoundsLikelihoodConfig(
+                type="max_mass_bounds",
+                name="Test",
+                lower_mean=[],
+                lower_std=[0.016],
+                upper_mean=2.16,
+                upper_std=0.17,
+            )
+
+    def test_max_mass_bounds_factory_integration(self):
+        """Test creating MaxMassBoundsLikelihood through factory."""
+        from pydantic import TypeAdapter
+
+        config_dict = {
+            "type": "max_mass_bounds",
+            "enabled": True,
+            "name": "Factory_Test",
+            "lower_mean": [1.908, 2.01],
+            "lower_std": [0.016, 0.04],
+            "upper_mean": 2.16,
+            "upper_std": 0.17,
+        }
+
+        adapter = TypeAdapter(schema.LikelihoodConfig)
+        config = adapter.validate_python(config_dict)
+        assert isinstance(config, schema.MaxMassBoundsLikelihoodConfig)
+
+        likelihood = factory.create_likelihood(config)
+        assert isinstance(likelihood, MaxMassBoundsLikelihood)
+        assert likelihood.name == "Factory_Test"
+
+    def test_max_mass_bounds_combined_likelihood(self):
+        """Test MaxMassBoundsLikelihood in combined likelihood."""
+        likelihood = MaxMassBoundsLikelihood(
+            name="Test",
+            lower_mean=[1.908],
+            lower_std=[0.016],
+            upper_mean=2.16,
+            upper_std=0.17,
+        )
+
+        combined = CombinedLikelihood([likelihood])
+        params = {"masses_EOS": jnp.linspace(1.0, 2.10, 50)}
+        result = combined.evaluate(params)
+
+        assert jnp.isfinite(result)
+        assert result > -10.0
 
 
 class TestLikelihoodFactory:

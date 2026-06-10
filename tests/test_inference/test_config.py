@@ -49,6 +49,21 @@ class TestEOSConfig:
         assert config.n_points_high == 500
         assert config.crust_name == "SLy"
 
+    def test_valid_standalone_alias_configs(self):
+        """Test standalone EOS aliases."""
+        metamodel = schema.MetamodelEOSConfig(type="metamodel_only")
+        skyrme = schema.SkyrmeEOSConfig(type="skyrme_only")
+
+        assert metamodel.type == "metamodel_only"
+        assert skyrme.type == "skyrme_only"
+        assert skyrme.nb_CSE == 0
+
+    def test_valid_skyrme_cse_config(self):
+        """Test valid Skyrme CSE configuration."""
+        config = schema.SkyrmeCSEEOSConfig(type="skyrme_cse", nb_CSE=4)
+        assert config.type == "skyrme_cse"
+        assert config.nb_CSE == 4
+
     def test_metamodel_with_nonzero_cse_fails(self):
         """Test that metamodel with nb_CSE != 0 fails validation."""
         with pytest.raises(ValidationError, match="nb_CSE must be 0"):
@@ -140,6 +155,15 @@ class TestEOSConfig:
         spectral_dict = {"type": "spectral", "crust_name": "SLy"}
         config = adapter.validate_python(spectral_dict)
         assert isinstance(config, schema.SpectralEOSConfig)
+
+        # Test standalone aliases
+        metamodel_only_dict = {"type": "metamodel_only", "nb_CSE": 0}
+        config = adapter.validate_python(metamodel_only_dict)
+        assert isinstance(config, schema.MetamodelEOSConfig)
+
+        skyrme_only_dict = {"type": "skyrme_only", "nb_CSE": 0}
+        config = adapter.validate_python(skyrme_only_dict)
+        assert isinstance(config, schema.SkyrmeEOSConfig)
 
 
 class TestTOVConfig:

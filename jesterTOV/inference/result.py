@@ -361,6 +361,17 @@ class InferenceResult:
             )
 
         # Extract parameter samples (exclude metadata and sampler-specific fields)
+        # Also exclude any transform-derived EOS quantities that may already be in posterior
+        # from a prior call to add_eos_from_transform.
+        eos_derived_starting = {  # known transform output keys
+            "masses_EOS", "radii_EOS", "Lambdas_EOS",
+            "logpc_EOS", "n", "p", "e", "h", "cs2", "dloge_dlogp", "n_TOV",
+            "n_tov_failures", "n_causality_violations",
+            "n_stability_violations", "n_pressure_violations",
+            "n_esym_violations", "n_orig", "n_gamma_violations",
+            "proton_fraction", "e_fraction", "muon_fraction",
+            "durca_density.ye", "durca_density.ym", "durca_density.nb_durca",
+        }
         exclude_keys = {
             "log_prob",
             "log_prob_full",
@@ -373,15 +384,7 @@ class InferenceResult:
             "logL_birth",
             "logL_birth_full",
             "_sampler_specific",
-            "masses_EOS",
-            "radii_EOS",
-            "Lambdas_EOS",
-            "n",
-            "p",
-            "e",
-            "cs2",
-            "n_TOV",
-        }
+        } | eos_derived_starting
         param_samples = {
             k: v for k, v in self.posterior.items() if k not in exclude_keys
         }
@@ -422,18 +425,15 @@ class InferenceResult:
         )
 
         # Add transformed outputs to posterior (EOS quantities only, not input parameters)
-        # Filter out input parameters from transformed_samples to avoid overwriting full posterior arrays
-        eos_keys = {
-            "masses_EOS",
-            "radii_EOS",
-            "Lambdas_EOS",
-            "n",
-            "p",
-            "e",
-            "cs2",
-            "n_TOV",
+        # Filter out input parameters from transformed_samples to avoid overwriting full posterior arrays.
+        # Dynamically include any transform output that is not an input parameter — this automatically
+        # captures extra_constraints (proton_fraction, e_fraction, muon_fraction, durca_density_*),
+        # constraint violation counts, and any future EOS diagnostics without a hardcoded whitelist.
+        eos_only = {
+            k: v
+            for k, v in transformed_samples.items()
+            if k not in param_samples
         }
-        eos_only = {k: v for k, v in transformed_samples.items() if k in eos_keys}
         self.add_derived_eos(eos_only)
 
         # If we selected a subset, filter log_prob and sampler fields to match
@@ -499,17 +499,15 @@ class InferenceResult:
             posterior_grp = f.create_group("posterior")
 
             # Separate parameters from derived quantities
-            # Heuristic: derived quantities have specific names
-            derived_keys = {
-                "masses_EOS",
-                "radii_EOS",
-                "Lambdas_EOS",
-                "n",
-                "p",
-                "e",
-                "cs2",
-                "n_TOV",
-            }
+            # Use metadata parameter_names to identify parameters (old approach,
+            # compatible with jester-EoS-dUrca-230326 format). Everything that is
+            # not a parameter, not log_prob, and not sampler-specific is routed to
+            # derived_eos/ — this automatically captures extra_constraints such as
+            # proton_fraction, e_fraction, muon_fraction, durca_density.*, etc.
+            param_names = set(self.metadata.get("parameter_names", []))
+            # Also include fixed params since they are parameters stored in posterior
+            fixed_params_from_meta = self.metadata.get("fixed_params", {})
+            all_param_names = param_names.union(fixed_params_from_meta.keys())
             sampler_specific_keys = {"weights", "ess", "logL", "logL_birth"}
 
             # Get sampler-specific data if present (use .get() to avoid mutating self.posterior)
@@ -530,13 +528,13 @@ class InferenceResult:
                 elif key == "log_prob":
                     # log_prob goes directly in /posterior
                     posterior_grp.create_dataset("log_prob", data=value)
-                elif key in derived_keys:
-                    derived_grp.create_dataset(key, data=value)
                 elif key in sampler_specific_keys:
                     sampler_grp.create_dataset(key, data=value)
-                else:
-                    # Assume it's a parameter
+                elif key in all_param_names:
                     params_grp.create_dataset(key, data=value)
+                else:
+                    # Everything else is derived EOS quantity
+                    derived_grp.create_dataset(key, data=value)
 
             # Add sampler-specific data from the dict
             for key, value in sampler_specific_data.items():  # type: ignore[union-attr]

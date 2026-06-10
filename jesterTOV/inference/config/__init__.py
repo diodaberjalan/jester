@@ -7,7 +7,12 @@ from .schema import (
     BaseMetamodelEOSConfig,
     MetamodelEOSConfig,
     MetamodelCSEEOSConfig,
+    MetamodelPeakCSEEOSConfig,
     SpectralEOSConfig,
+    BaseSkyrmeEOSConfig,
+    SkyrmeEOSConfig,
+    SkyrmeCSEEOSConfig,
+    SkyrmePeakCSEEOSConfig,
     EOSConfig,
     # TOV
     BaseTOVConfig,
@@ -26,6 +31,8 @@ from .schema import (
     GammaConstraintsLikelihoodConfig,
     DeprecatedConstraintsLikelihoodConfig,
     REXLikelihoodConfig,
+    MaxMassBoundsLikelihoodConfig,
+    DirectUrcaLikelihoodConfig,
     ZeroLikelihoodConfig,
     LikelihoodConfig,
     # Samplers
@@ -48,7 +55,12 @@ __all__ = [
     "BaseMetamodelEOSConfig",
     "MetamodelEOSConfig",
     "MetamodelCSEEOSConfig",
+    "MetamodelPeakCSEEOSConfig",
     "SpectralEOSConfig",
+    "BaseSkyrmeEOSConfig",
+    "SkyrmeEOSConfig",
+    "SkyrmeCSEEOSConfig",
+    "SkyrmePeakCSEEOSConfig",
     "EOSConfig",
     # TOV
     "BaseTOVConfig",
@@ -67,6 +79,8 @@ __all__ = [
     "GammaConstraintsLikelihoodConfig",
     "DeprecatedConstraintsLikelihoodConfig",
     "REXLikelihoodConfig",
+    "MaxMassBoundsLikelihoodConfig",
+    "DirectUrcaLikelihoodConfig",
     "ZeroLikelihoodConfig",
     "LikelihoodConfig",
     # Samplers

@@ -29,6 +29,9 @@ from jax.scipy.stats import norm
 from jaxtyping import Array, Float
 
 from jesterTOV.inference.base import LikelihoodBase
+from jesterTOV.logging_config import get_logger
+
+logger = get_logger("jester")
 
 
 class RadioTimingLikelihood(LikelihoodBase):
@@ -196,6 +199,164 @@ class RadioTimingLikelihood(LikelihoodBase):
 
         # Safety net: replace any remaining NaN/inf with penalty value
         # This catches edge cases not covered by the mtov check
+        log_likelihood = jnp.nan_to_num(
+            log_likelihood,
+            nan=self.penalty_value,
+            posinf=self.penalty_value,
+            neginf=self.penalty_value,
+        )
+
+        return log_likelihood
+
+
+class MaxMassBoundsLikelihood(LikelihoodBase):
+    r"""Likelihood for maximum neutron star mass using joint lower and upper bounds.
+
+    This likelihood evaluates the consistency of an equation of state's maximum
+    TOV mass (M_TOV) against combined lower limits from heavy pulsar observations
+    and an upper limit, e.g., from maximum NS mass estimation related to
+    multimessenger events (e.g., GW170817).
+
+    Based on Dietrich et al. (2020), the likelihood is given by the product of
+    cumulative distribution functions:
+
+    .. math::
+        \mathcal{L}(M_{\text{TOV}}) = \left[ \prod_i \text{CDF}(M_{\text{TOV}},
+        \mathcal{N}(M_i^{\text{PSR}}, \sigma_i^{\text{PSR}})) \right]
+        \times \left[ 1 - \text{CDF}(M_{\text{TOV}},
+        \mathcal{N}(M^{\text{upper}}, \sigma^{\text{upper}})) \right]
+
+    Parameters
+    ----------
+    name : str
+        Identifier for this likelihood constraint (e.g., "Joint_Mass_Bounds").
+    lower_mean : float or array_like
+        Mean mass of the lower bound observation(s) in solar masses.
+    lower_std : float or array_like
+        1-sigma uncertainty of the lower bound observation(s) in solar masses.
+    upper_mean : float
+        Mean mass of the upper bound observation in solar masses.
+    upper_std : float
+        1-sigma uncertainty of the upper bound observation in solar masses.
+    m_min : float, optional
+        Minimum mass for the integration lower bound in solar masses. This should be
+        well below any physical neutron star mass to avoid truncation effects.
+        Default is 0.1 :math:`M_{\odot}`.
+    penalty_value : float, optional
+        Log-likelihood penalty for invalid TOV solutions (M_TOV ≤ m_min).
+        Default is -1e5.
+
+    Attributes
+    ----------
+    name : str
+        Likelihood designation
+    lower_mean : Array
+        Observed lower mass means in solar masses
+    lower_std : Array
+        Observed lower mass uncertainties in solar masses
+    upper_mean : float
+        Observed upper mass mean in solar masses
+    upper_std : float
+        Observed upper mass uncertainty in solar masses
+    m_min : float
+        Minimum mass threshold (solar masses)
+    penalty_value : float
+        Log-likelihood penalty for invalid TOV solutions
+
+    Examples
+    --------
+    Create a joint mass bounds likelihood with PSR J0348+4032, PSR J1614-2230,
+    and a GW170817 upper bound:
+
+    >>> from jesterTOV.inference.likelihoods.radio import MaxMassBoundsLikelihood
+    >>> likelihood = MaxMassBoundsLikelihood(
+    ...     name="Joint_Mass_Bounds",
+    ...     lower_mean=[1.908, 2.01],
+    ...     lower_std=[0.016, 0.04],
+    ...     upper_mean=2.16,
+    ...     upper_std=0.17,
+    ... )
+    >>> params = {"masses_EOS": jnp.array([1.0, 1.5, 2.0, 2.2])}
+    >>> log_like = likelihood.evaluate(params, data={})
+    """
+
+    name: str
+    lower_mean: Float[Array, " n_lower"]
+    lower_std: Float[Array, " n_lower"]
+    upper_mean: float
+    upper_std: float
+    m_min: float
+    penalty_value: float
+
+    def __init__(
+        self,
+        name: str,
+        lower_mean: float | list[float] | Array,
+        lower_std: float | list[float] | Array,
+        upper_mean: float,
+        upper_std: float,
+        m_min: float = 0.1,
+        penalty_value: float = -1e5,
+    ) -> None:
+        super().__init__()
+        self.name = name
+        self.lower_mean = jnp.atleast_1d(jnp.array(lower_mean))
+        self.lower_std = jnp.atleast_1d(jnp.array(lower_std))
+        self.upper_mean = upper_mean
+        self.upper_std = upper_std
+        self.m_min = m_min
+        self.penalty_value = penalty_value
+
+    def evaluate(self, params: dict[str, Float | Array]) -> Float:
+        """Evaluate the log-likelihood for the combined mass bounds.
+
+        This method computes the joint likelihood by:
+        1. Extracting the maximum TOV mass from the EOS
+        2. Computing standardized z-scores for all lower bound observations
+        3. Computing the standardized z-score for the upper bound
+        4. Summing the log-probabilities, using Gaussian symmetry to handle
+           1 - CDF stably.
+
+        Parameters
+        ----------
+        params : dict[str, Float | Array]
+            Dictionary containing TOV solution outputs from the transform.
+            Required keys:
+
+            - "masses_EOS" : Array of neutron star masses (solar masses) at
+              different central pressures. The maximum value is taken as M_TOV.
+
+        Returns
+        -------
+        Float
+            Natural logarithm of the combined likelihood. Returns a large
+            negative penalty for invalid EOSs.
+        """
+        masses_EOS: Float[Array, " n_points"] = params["masses_EOS"]
+        mtov: Float = jnp.max(masses_EOS)
+
+        # Check for invalid M_TOV before computing
+        invalid_mtov = mtov <= self.m_min
+
+        # Lower bounds (Pulsars):
+        #   sum log(CDF((M_TOV - mu_lower) / sigma_lower))
+        z_lower = (mtov - self.lower_mean) / self.lower_std
+        log_like_lower = jnp.sum(norm.logcdf(z_lower))
+
+        # Upper bound (e.g. GW170817):
+        #   log(1 - CDF((M_TOV - mu_upper) / sigma_upper))
+        #   = log(CDF((mu_upper - M_TOV) / sigma_upper)) via symmetry
+        z_upper = (self.upper_mean - mtov) / self.upper_std
+        log_like_upper = norm.logcdf(z_upper)
+
+        # Combine likelihoods and apply penalty if mtov is unphysical
+        log_likelihood = jnp.where(
+            invalid_mtov,
+            self.penalty_value,
+            log_like_lower + log_like_upper,
+        )
+
+        # Safety net: replace any remaining NaN/inf with penalty value
         log_likelihood = jnp.nan_to_num(
             log_likelihood,
             nan=self.penalty_value,
