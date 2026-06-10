@@ -109,7 +109,9 @@ class MetamodelAdaptiveCSEEOSConfig(BaseMetamodelEOSConfig):
 
     In the adaptive CSE variant, ``nbreak`` is **not** a free parameter —
     it is determined automatically as the first density where the base
-    meta-model's :math:`c_s^2` reaches or exceeds ``cs2_threshold``.
+    meta-model's :math:`c_s^2` reaches or exceeds ``cs2_high_threshold``
+    OR drops to or below ``cs2_low_threshold`` — whichever occurs at a
+    lower density.
 
     Attributes
     ----------
@@ -119,15 +121,26 @@ class MetamodelAdaptiveCSEEOSConfig(BaseMetamodelEOSConfig):
         Number of CSE parameters (must be > 0, typically 4-8)
     ndat_CSE : int
         Number of density grid points for the CSE region (default: 100)
-    cs2_threshold : float
-        Speed-of-sound squared threshold for automatic ``nbreak``
-        detection (default: 0.95).
+    cs2_high_threshold : float
+        High speed-of-sound squared threshold for automatic ``nbreak``
+        detection (default: 0.95).  If :math:`c_s^2` reaches or exceeds
+        this value, the CSE extension is triggered.
+    cs2_low_threshold : float
+        Low speed-of-sound squared threshold for automatic ``nbreak``
+        detection (default: 0.05).  If :math:`c_s^2` drops to or below
+        this value, the CSE extension is triggered.
+    min_nbreak_nsat : float
+        Minimum break density in units of :math:`n_0` (default: 2.0).
+        The auto-detected ``nbreak`` is clamped to be at least this value,
+        ensuring the base meta-model governs the EOS up to this density.
     """
 
     type: Literal["metamodel_adaptive_cse"] = "metamodel_adaptive_cse"
     nb_CSE: int = 8
     ndat_CSE: int = 100
-    cs2_threshold: float = 0.95
+    cs2_high_threshold: float = 0.95
+    cs2_low_threshold: float = 0.05
+    min_nbreak_nsat: float = 2.0
 
     @field_validator("nb_CSE")
     @classmethod
@@ -254,7 +267,9 @@ class SkyrmeAdaptiveCSEEOSConfig(BaseSkyrmeEOSConfig):
 
     In the adaptive CSE variant, ``nbreak`` is **not** a free parameter —
     it is determined automatically as the first density where the base
-    Skyrme EOS's :math:`c_s^2` reaches or exceeds ``cs2_threshold``.
+    Skyrme EOS's :math:`c_s^2` reaches or exceeds ``cs2_high_threshold``
+    OR drops to or below ``cs2_low_threshold`` — whichever occurs at a
+    lower density.
 
     Attributes
     ----------
@@ -264,15 +279,26 @@ class SkyrmeAdaptiveCSEEOSConfig(BaseSkyrmeEOSConfig):
         Number of CSE parameters (must be > 0, typically 4-8)
     ndat_CSE : int
         Number of density grid points for the CSE region (default: 100)
-    cs2_threshold : float
-        Speed-of-sound squared threshold for automatic ``nbreak``
-        detection (default: 0.95).
+    cs2_high_threshold : float
+        High speed-of-sound squared threshold for automatic ``nbreak``
+        detection (default: 0.95).  If :math:`c_s^2` reaches or exceeds
+        this value, the CSE extension is triggered.
+    cs2_low_threshold : float
+        Low speed-of-sound squared threshold for automatic ``nbreak``
+        detection (default: 0.05).  If :math:`c_s^2` drops to or below
+        this value, the CSE extension is triggered.
+    min_nbreak_nsat : float
+        Minimum break density in units of :math:`n_0` (default: 2.0).
+        The auto-detected ``nbreak`` is clamped to be at least this value,
+        ensuring the base Skyrme model governs the EOS up to this density.
     """
 
     type: Literal["skyrme_adaptive_cse"] = "skyrme_adaptive_cse"
     nb_CSE: int = 8
     ndat_CSE: int = 100
-    cs2_threshold: float = 0.95
+    cs2_high_threshold: float = 0.95
+    cs2_low_threshold: float = 0.05
+    min_nbreak_nsat: float = 2.0
 
     @field_validator("nb_CSE")
     @classmethod

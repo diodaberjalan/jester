@@ -9,7 +9,8 @@ eos:
   nmax_nsat: 25.0
   nb_CSE: 6
   ndat_CSE: 100
-  cs2_threshold: 0.95
+  cs2_high_threshold: 0.95
+  cs2_low_threshold: 0.05
   crust_name: "DH"
 
 tov:
@@ -22,20 +23,16 @@ prior:
   specification_file: "prior.prior"
 
 likelihoods:
-- type: max_mass_bounds
+- type: constraints_eos
   enabled: true
-  name: "Joint_Mass_Bounds"
-  lower_mean: [1.908, 2.01]
-  lower_std: [0.016, 0.04]
-  upper_mean: 2.16
-  upper_std: 0.17
-  penalty_value: -1e5
-- type: direct_urca
+- type: gw
   enabled: true
-  check_type: "n_reference"
-  reference_mass: 1.4
-  constraint_type: "n_break"
-  penalty_value: -1e5
+  events:
+  - name: GW170817
+  penalty_value: -99999.0
+  N_masses_evaluation: 2000
+  N_masses_batch_size: 1000
+  seed: 42
 sampler:
   type: smc-rw
   n_particles: 1000

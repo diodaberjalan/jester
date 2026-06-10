@@ -1,4 +1,6 @@
 outdir/
+outdir_*/
+figures/
 *.h5
 *.pdf
 *.png

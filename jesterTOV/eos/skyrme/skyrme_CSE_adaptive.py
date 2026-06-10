@@ -1,16 +1,17 @@
 r"""Skyrme EOS with adaptive piecewise constant speed-of-sound extensions.
 
 The break density (``nbreak``) is not a free parameter — it is determined
-automatically from the base Skyrme EOS by locating the density where
-the speed of sound squared crosses a user-specified threshold (default 0.95).
+automatically from the base Skyrme EOS by locating the first density
+(going upward) where the speed of sound squared reaches or exceeds
+``cs2_high_threshold`` (stiffening) OR drops to or below
+``cs2_low_threshold`` (softening) — whichever occurs first.
 
 This is useful for:
 
-- Starting the CSE extension *before* the EOS becomes acausal (``cs2_threshold=0.95``),
-  replacing the near-superlumital tail with a controlled piecewise-constant
-  parameterisation.
-- Triggering the CSE extension near a phase-transition softening
-  (``cs2_threshold=0.05``), capturing a drop in stiffness.
+- Starting the CSE extension *before* the EOS becomes acausal, replacing the
+  near-superlumital tail with a controlled piecewise-constant parameterisation.
+- Triggering the CSE extension near a phase-transition softening, capturing a
+  drop in stiffness.
 """
 
 from typing import Union
@@ -33,8 +34,8 @@ class Skyrme_with_AdaptiveCSE_EOS_model(Interpolate_EOS_model):
 
     Identical in spirit to :class:`Skyrme_with_CSE_EOS_model`, except that
     ``nbreak`` is **not** a free prior parameter.  Instead it is located
-    automatically as the first density (going upward) where the Skyrme EOS's
-    :math:`c_s^2` reaches or exceeds ``cs2_threshold``.
+    automatically as the first density where :math:`c_s^2` reaches or exceeds
+    ``cs2_high_threshold`` OR drops to or below ``cs2_low_threshold``.
 
     The EOS is constructed in two regions:
 
@@ -55,7 +56,9 @@ class Skyrme_with_AdaptiveCSE_EOS_model(Interpolate_EOS_model):
         ndat_skyrme: Int = 100,
         ndat_CSE: Int = 100,
         nb_CSE: int = 0,
-        cs2_threshold: Float = 0.95,
+        cs2_high_threshold: Float = 0.95,
+        cs2_low_threshold: Float = 0.05,
+        min_nbreak_nsat: Float = 2.0,
         **skyrme_kwargs,
     ):
         r"""
@@ -75,10 +78,18 @@ class Skyrme_with_AdaptiveCSE_EOS_model(Interpolate_EOS_model):
                 Defaults to 100.
             nb_CSE: Number of CSE grid points.  If > 0, CSE grid parameters are
                 generated from the params in ``construct_eos``.  Defaults to 0.
-            cs2_threshold: Speed-of-sound squared threshold for automatic
-                ``nbreak`` detection.  The break density is the first point
-                (going upward) where the base Skyrme's :math:`c_s^2` reaches
-                or exceeds this value.  Defaults to 0.95.
+            cs2_high_threshold: High speed-of-sound squared threshold for
+                automatic ``nbreak`` detection.  The break density is the
+                first point where :math:`c_s^2` reaches or exceeds this value.
+                Defaults to 0.95.
+            cs2_low_threshold: Low speed-of-sound squared threshold for
+                automatic ``nbreak`` detection.  The break density is the
+                first point where :math:`c_s^2` drops to or below this value.
+                Defaults to 0.05.
+            min_nbreak_nsat: Minimum break density in units of :math:`n_0`.
+                The auto-detected ``nbreak`` is clamped to be at least this
+                value, ensuring the base Skyrme model governs the EOS up to
+                this density.  Defaults to 2.0.
             **skyrme_kwargs: Passed to :class:`Skyrme_EOS_model`.
         """
         self.nmax = nmax_nsat * nsat
@@ -88,7 +99,9 @@ class Skyrme_with_AdaptiveCSE_EOS_model(Interpolate_EOS_model):
         self.ndat_skyrme = ndat_skyrme
         self.nmax_nsat = nmax_nsat
         self.nb_CSE = nb_CSE
-        self.cs2_threshold = cs2_threshold
+        self.cs2_high_threshold = cs2_high_threshold
+        self.cs2_low_threshold = cs2_low_threshold
+        self.min_nbreak = min_nbreak_nsat * nsat
         self.skyrme_kwargs = skyrme_kwargs
 
         # Store proton_fraction setting for later use
@@ -108,33 +121,66 @@ class Skyrme_with_AdaptiveCSE_EOS_model(Interpolate_EOS_model):
     def _find_nbreak_from_cs2(
         n_full: Float[Array, " n"],
         cs2_full: Float[Array, " n"],
-        threshold: float,
+        threshold_high: float,
+        threshold_low: float,
         n_max: float,
-        direction: str = "above",
+        n_min: float = 0.0,
+        nbreak_min: float = 0.0,
     ) -> Float[Array, ""]:
-        r"""Locate the first density where :math:`c_s^2` crosses a threshold.
+        r"""Locate first density where :math:`c_s^2` enters either extreme regime.
+
+        Scans for the first density (going upward) where the speed-of-sound
+        squared reaches or exceeds ``threshold_high`` (stiffening) OR drops
+        to or below ``threshold_low`` (softening).  Whichever occurs at a
+        lower density wins.  If neither threshold is crossed anywhere on the
+        grid, falls back to ``n_max``.
+
+        Points with density below ``n_min`` are excluded from the scan to
+        skip crust physics where :math:`c_s^2` is artificially low (e.g.
+        :math:`c_s^2 \\ll 0.05` at crust densities).
+
+        The result is clamped to be at least ``nbreak_min`` (if provided),
+        ensuring the base EOS model describes the EOS up to that density
+        before the CSE extension takes over.
 
         Args:
             n_full: Density grid in :math:`\mathrm{fm}^{-3}` (monotonic).
             cs2_full: Speed-of-sound squared on the same grid.
-            threshold: Target threshold value.
-            n_max: Fallback density when the threshold is never crossed.
-            direction: ``"above"`` (default) finds first point where
-                ``cs2 >= threshold``; ``"below"`` finds first point
-                where ``cs2 <= threshold``.
+            threshold_high: High threshold for stiffening regime (e.g. 0.95).
+            threshold_low: Low threshold for softening regime (e.g. 0.05).
+            n_max: Fallback density when neither threshold is crossed.
+            n_min: Minimum density to consider — points below this are
+                excluded from the scan (default: 0.0, no exclusion).
+            nbreak_min: Minimum value for the returned break density.
+                If the auto-detected ``nbreak`` is below this, it is clamped
+                upward (default: 0.0, no clamping).
 
         Returns:
             Scalar array: the break density in :math:`\mathrm{fm}^{-3}`.
         """
-        mask = (
-            cs2_full >= threshold if direction == "above"
-            else cs2_full <= threshold
-        )
-        any_crossed = jnp.any(mask)
+        # Exclude points below n_min (e.g., crust region where cs² ≪ 0.05)
+        core_mask = n_full >= n_min
+        # Stiffening: cs² >= high threshold
+        mask_high = (cs2_full >= threshold_high) & core_mask
+        any_high = jnp.any(mask_high)
         indices = jnp.arange(len(cs2_full))
-        masked_indices = jnp.where(mask, indices, len(cs2_full))
-        first_idx = jnp.min(masked_indices)
-        return jnp.where(any_crossed, n_full[first_idx], n_max)
+        masked_high = jnp.where(mask_high, indices, len(cs2_full))
+        first_high = jnp.min(masked_high)
+        n_high = jnp.where(any_high, n_full[first_high], jnp.inf)
+
+        # Softening: cs² <= low threshold
+        mask_low = (cs2_full <= threshold_low) & core_mask
+        any_low = jnp.any(mask_low)
+        masked_low = jnp.where(mask_low, indices, len(cs2_full))
+        first_low = jnp.min(masked_low)
+        n_low = jnp.where(any_low, n_full[first_low], jnp.inf)
+
+        # Take whichever comes first (lower density)
+        nbreak = jnp.minimum(n_high, n_low)
+        # Clamp to enforce minimum break density
+        nbreak = jnp.where(jnp.isinf(nbreak), n_max, nbreak)
+        nbreak = jnp.maximum(nbreak, nbreak_min)
+        return nbreak
 
     def construct_eos(
         self,
@@ -197,12 +243,13 @@ class Skyrme_with_AdaptiveCSE_EOS_model(Interpolate_EOS_model):
         e_skyrme_full = e_skyrme_full / utils.MeV_fm_inv3_to_geometric
 
         # ----------------------------------------------------------------
-        # 2.  Automatic nbreak from cs² threshold
+        # 2.  Automatic nbreak from cs² thresholds
         # ----------------------------------------------------------------
-        direction = "above" if self.cs2_threshold >= 0.5 else "below"
         nbreak = self._find_nbreak_from_cs2(
             n_skyrme_full, cs2_skyrme_full,
-            self.cs2_threshold, self.nmax, direction,
+            self.cs2_high_threshold, self.cs2_low_threshold, self.nmax,
+            n_min=self.nmin_Skyrme_nsat * self.nsat,
+            nbreak_min=self.min_nbreak,
         )
 
         # Expose nbreak in extra dict so downstream likelihoods
@@ -298,7 +345,7 @@ class Skyrme_with_AdaptiveCSE_EOS_model(Interpolate_EOS_model):
         Return list of parameters required by Skyrme with adaptive CSE.
 
         ``nbreak`` is **not** included — it is auto-detected from
-        :math:`c_s^2`.
+        :math:`c_s^2` thresholds.
 
         Returns:
             list[str]: INM parameters + CSE grid parameters
