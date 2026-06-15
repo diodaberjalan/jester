@@ -282,6 +282,76 @@ def limit_by_MTOV(
     return pc_new, m_new, r_new, l_new
 
 
+def limit_by_MTOV_and_interpolate(
+    pc: Array, m: Array, r: Array, l: Array, ndat: int
+) -> tuple[Array, Array, Array, Array]:
+    r"""
+    Keep the first stable mass-radius branch and interpolate it in log pressure.
+
+    The stable branch is identified by increasing mass with increasing central
+    pressure, :math:`dM/dp_c > 0`. Only the first contiguous stable branch is
+    retained; disconnected branches after an instability are intentionally
+    ignored.
+
+    Parameters
+    ----------
+    pc : Array
+        Central pressure array
+    m : Array
+        Gravitational mass array
+    r : Array
+        Radius array
+    l : Array
+        Tidal deformability array
+    ndat : int
+        Number of interpolation points
+
+    Returns
+    -------
+    pc : Array
+        Interpolated central pressure array
+    m : Array
+        Interpolated gravitational mass array
+    r : Array
+        Interpolated radius array
+    l : Array
+        Interpolated tidal deformability array
+    """
+    sort_idx = jnp.argsort(pc)
+    pc = pc[sort_idx]
+    m = m[sort_idx]
+    r = r[sort_idx]
+    l = l[sort_idx]
+
+    log_pc = jnp.log(pc)
+    stable_edges = jnp.diff(m) > 0.0
+    padded = jnp.concatenate(
+        (
+            jnp.array([False]),
+            stable_edges,
+            jnp.array([False]),
+        )
+    )
+    transitions = padded[1:].astype(jnp.int32) - padded[:-1].astype(jnp.int32)
+
+    starts = jnp.where(transitions == 1, size=1, fill_value=0)[0]
+    ends = jnp.where(transitions == -1, size=1, fill_value=0)[0]
+    start = starts[0]
+    end = ends[0]
+
+    has_stable_branch = jnp.any(stable_edges)
+    query_min = log_pc[start]
+    query_max = log_pc[end]
+    log_pc_query = jnp.linspace(query_min, query_max, ndat)
+    log_pc_query = jnp.where(has_stable_branch, log_pc_query, log_pc[0])
+
+    m_new = jnp.interp(log_pc_query, log_pc, m)
+    r_new = jnp.interp(log_pc_query, log_pc, r)
+    l_new = jnp.interp(log_pc_query, log_pc, l)
+
+    return jnp.exp(log_pc_query), m_new, r_new, l_new
+
+
 ###################
 ### SPLINES etc ###
 ###################

@@ -228,6 +228,53 @@ class TestLimitByMTOV:
         # Output should be sorted by mass
         assert jnp.all(jnp.diff(m_new) >= 0)
 
+    def test_limit_by_mtov_and_interpolate_basic(self):
+        """Test stable branch interpolation below MTOV."""
+        pc = jnp.linspace(1.0, 10.0, 10)
+        m = jnp.array([1.0, 1.2, 1.5, 1.8, 2.0, 2.1, 2.0, 1.9, 1.8, 1.7])
+        r = jnp.linspace(12.0, 10.0, 10)
+        l = jnp.linspace(500.0, 100.0, 10)
+
+        pc_new, m_new, r_new, l_new = utils.limit_by_MTOV_and_interpolate(
+            pc, m, r, l, 6
+        )
+
+        assert pc_new.shape == (6,)
+        assert m_new.shape == (6,)
+        assert r_new.shape == (6,)
+        assert l_new.shape == (6,)
+        assert jnp.all(jnp.diff(pc_new) > 0.0)
+        assert jnp.all(jnp.diff(m_new) >= 0.0)
+        assert jnp.isclose(pc_new[0], pc[0])
+        assert jnp.isclose(pc_new[-1], pc[5])
+
+    def test_limit_by_mtov_and_interpolate_sorts_by_pressure(self):
+        """Test that unsorted central pressures are handled."""
+        pc = jnp.array([4.0, 1.0, 3.0, 2.0, 5.0])
+        m = jnp.array([1.6, 1.0, 1.4, 1.2, 1.5])
+        r = jnp.array([11.0, 12.0, 11.5, 11.8, 10.8])
+        l = jnp.array([250.0, 500.0, 300.0, 400.0, 200.0])
+
+        pc_new, m_new, _, _ = utils.limit_by_MTOV_and_interpolate(pc, m, r, l, 5)
+
+        assert jnp.all(jnp.diff(pc_new) > 0.0)
+        assert jnp.all(jnp.diff(m_new) >= 0.0)
+        assert jnp.isclose(pc_new[0], 1.0)
+        assert jnp.isclose(pc_new[-1], 4.0)
+
+    def test_limit_by_mtov_and_interpolate_keeps_first_stable_branch(self):
+        """Test that later disconnected stable branches are ignored."""
+        pc = jnp.arange(1.0, 9.0)
+        m = jnp.array([1.0, 1.3, 1.6, 1.5, 1.4, 1.45, 1.55, 1.50])
+        r = jnp.linspace(12.0, 10.0, 8)
+        l = jnp.linspace(500.0, 100.0, 8)
+
+        pc_new, m_new, _, _ = utils.limit_by_MTOV_and_interpolate(pc, m, r, l, 5)
+
+        assert jnp.isclose(pc_new[0], pc[0])
+        assert jnp.isclose(pc_new[-1], pc[2])
+        assert jnp.all(m_new <= m[2])
+
 
 class TestCalculateRestMassDensity:
     """Test rest mass density calculation."""
