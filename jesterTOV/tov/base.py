@@ -205,21 +205,18 @@ class TOVSolverBase(ABC):
         # Calculate tidal deformability
         lambdas = 2.0 / 3.0 * k2s * jnp.power(compactness, -5.0)
 
-        # Limit masses to be below MTOV (removes unstable branch)
-        pcs_lim, masses_lim, radii_lim, lambdas_lim = utils.limit_by_MTOV(
-            pcs, masses_solar, radii_km, lambdas
+        # Keep the stable branch below MTOV and interpolate on a log(pc) grid
+        pcs_interp, masses_interp, radii_interp, lambdas_interp = (
+            utils.limit_by_MTOV_and_interpolate(
+                pcs, masses_solar, radii_km, lambdas, ndat
+            )
         )
 
-        # Get a mass grid and interpolate, since we might have some duplicate points
-        mass_grid = jnp.linspace(jnp.min(masses_lim), jnp.max(masses_lim), ndat)
-        radii_interp = jnp.interp(mass_grid, masses_lim, radii_lim)
-        lambdas_interp = jnp.interp(mass_grid, masses_lim, lambdas_lim)
-        pcs_interp = jnp.interp(mass_grid, masses_lim, pcs_lim)
         log10pcs = jnp.log10(pcs_interp)
 
         return FamilyData(
             log10pcs=log10pcs,
-            masses=mass_grid,
+            masses=masses_interp,
             radii=radii_interp,
             lambdas=lambdas_interp,
         )
