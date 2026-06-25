@@ -860,11 +860,10 @@ class MaxMassBoundsLikelihoodConfig(BaseLikelihoodConfig):
 
 
 class DirectUrcaLikelihoodConfig(BaseLikelihoodConfig):
-    r"""Direct Urca likelihood configuration.
+    r"""Direct-Urca trigger-mass likelihood configuration.
 
-    Penalises EOS configurations where direct Urca is NOT active at a chosen
-    reference density.  The user specifies which density to check and a
-    configurable reference mass.
+    Evaluates the upper-limit likelihood for the trigger mass
+    :math:`m_{\rm trig}` where direct Urca or the CSE extension turns on.
 
     Examples
     --------
@@ -872,15 +871,14 @@ class DirectUrcaLikelihoodConfig(BaseLikelihoodConfig):
 
         - type: "direct_urca"
           enabled: true
-          check_type: "n_reference"      # central density at reference mass
-          reference_mass: 1.4             # :math:`M_{\odot}` (configurable)
+          trigger_assumption: "durca_only"
           penalty_value: -1e5
 
     .. code-block:: yaml
 
         - type: "direct_urca"
           enabled: true
-          check_type: "n_TOV"            # central density at M_TOV
+          trigger_assumption: "durca_or_cse"
           penalty_value: -1e5
     """
 
@@ -888,9 +886,25 @@ class DirectUrcaLikelihoodConfig(BaseLikelihoodConfig):
         default="direct_urca", description="Likelihood type identifier"
     )
 
+    trigger_assumption: Literal["durca_only", "durca_or_cse"] = Field(
+        default="durca_only",
+        description=(
+            "How to define m_trig. 'durca_only': require n_durca below n_TOV "
+            "and, when nbreak exists, below nbreak. 'durca_or_cse': use "
+            "n_durca or nbreak, whichever triggers first below n_TOV."
+        ),
+    )
+
+    name: str = Field(
+        default="Direct_Urca_Trigger_Mass",
+        description="Identifier for this likelihood constraint",
+    )
+
     check_type: Literal["n_reference", "n_TOV"] = Field(
         default="n_reference",
         description=(
+            "Legacy field accepted for backward compatibility and ignored by "
+            "the trigger-mass likelihood. "
             "Which density to check: 'n_reference' = central density of a star "
             "with mass = reference_mass; 'n_TOV' = central density of the "
             "maximum-mass star."
@@ -900,6 +914,8 @@ class DirectUrcaLikelihoodConfig(BaseLikelihoodConfig):
     constraint_type: Literal["none", "n_tov", "n_break"] = Field(
         default="none",
         description=(
+            "Legacy field accepted for backward compatibility and ignored by "
+            "the trigger-mass likelihood. "
             "Additional compatibility constraint on n_durca (the density where "
             "Yp first reaches X_DU).  'n_tov': n_durca < n_TOV (recommended for "
             "non-CSE models).  'n_break': n_durca < n_break (recommended for "
@@ -920,8 +936,8 @@ class DirectUrcaLikelihoodConfig(BaseLikelihoodConfig):
     penalty_value: float = Field(
         default=-1e5,
         description=(
-            "Log-likelihood penalty returned when Y_p < X_DU at the target "
-            "density (default: -1e5)."
+            "Log-likelihood penalty returned when no valid trigger exists below "
+            "M_TOV or required direct-Urca quantities are missing (default: -1e5)."
         ),
     )
 

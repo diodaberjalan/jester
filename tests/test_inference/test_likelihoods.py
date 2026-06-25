@@ -22,6 +22,8 @@ from jesterTOV.inference.likelihoods.constraints import (
 )
 from jesterTOV.inference.likelihoods.chieft import ChiEFTLikelihood
 from jesterTOV.inference.likelihoods.radio import RadioTimingLikelihood, MaxMassBoundsLikelihood
+from jesterTOV.inference.likelihoods.direct_urca import DirectUrcaLikelihood
+from jesterTOV import utils
 from jesterTOV.inference.base import LikelihoodBase
 
 
@@ -1321,3 +1323,80 @@ class TestNICERLikelihoodGroups:
             f"Single-group ({result_single:.4f}) != both-groups ({result_both:.4f}) "
             "for constant mock log_prob"
         )
+
+
+class TestDirectUrcaTriggerMassLikelihood:
+    """Tests for the direct-Urca trigger-mass upper-limit likelihood."""
+
+    @staticmethod
+    def _mock_params(nbreak: float | None = 0.25) -> dict[str, jax.Array]:
+        n_orig = jnp.array([0.10, 0.20, 0.30, 0.40, 0.50])
+        n_geom = n_orig * utils.fm_inv3_to_geometric
+        p_geom = n_geom * 10.0
+        logpc = jnp.log10(p_geom)
+        masses = jnp.array([0.8, 1.2, 1.5, 1.8, 2.0])
+
+        params = {
+            "n_orig": n_orig,
+            "proton_fraction": jnp.array([0.05, 0.08, 0.12, 0.14, 0.16]),
+            "n": n_geom,
+            "p": p_geom,
+            "logpc_EOS": logpc,
+            "masses_EOS": masses,
+            "n_TOV": 0.50 * utils.fm_inv3_to_geometric,
+        }
+        if nbreak is not None:
+            params["nbreak"] = jnp.asarray(nbreak)
+        return params
+
+    def test_durca_only_valid_without_cse_break(self):
+        likelihood = DirectUrcaLikelihood(
+            trigger_assumption="durca_only", penalty_value=-1e5
+        )
+
+        result = likelihood.evaluate(self._mock_params(nbreak=None))
+
+        assert jnp.isfinite(result)
+        assert result > -1e5
+
+    def test_durca_only_invalid_when_durca_after_cse_break(self):
+        likelihood = DirectUrcaLikelihood(
+            trigger_assumption="durca_only", penalty_value=-1e5
+        )
+
+        result = likelihood.evaluate(self._mock_params(nbreak=0.25))
+
+        assert result == -1e5
+
+    def test_durca_or_cse_uses_cse_break_when_it_triggers_first(self):
+        likelihood = DirectUrcaLikelihood(
+            trigger_assumption="durca_or_cse", penalty_value=-1e5
+        )
+
+        result = likelihood.evaluate(self._mock_params(nbreak=0.25))
+
+        assert jnp.isfinite(result)
+        assert result > -1e5
+
+    def test_durca_or_cse_invalid_when_both_triggers_above_tov(self):
+        likelihood = DirectUrcaLikelihood(
+            trigger_assumption="durca_or_cse", penalty_value=-1e5
+        )
+        params = self._mock_params(nbreak=0.60)
+        params["proton_fraction"] = jnp.array([0.05, 0.08, 0.10, 0.10, 0.10])
+
+        result = likelihood.evaluate(params)
+
+        assert result == -1e5
+
+    def test_factory_passes_trigger_assumption(self):
+        config = schema.DirectUrcaLikelihoodConfig(
+            trigger_assumption="durca_or_cse",
+            penalty_value=-123.0,
+        )
+
+        likelihood = factory.create_likelihood(config)
+
+        assert isinstance(likelihood, DirectUrcaLikelihood)
+        assert likelihood.trigger_assumption == "durca_or_cse"
+        assert likelihood.penalty_value == -123.0

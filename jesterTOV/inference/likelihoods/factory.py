@@ -208,9 +208,8 @@ def create_likelihood(
 
         case DirectUrcaLikelihoodConfig():
             return DirectUrcaLikelihood(
-                check_type=config.check_type,
-                constraint_type=config.constraint_type,
-                reference_mass=config.reference_mass,
+                trigger_assumption=config.trigger_assumption,
+                name=config.name,
                 penalty_value=config.penalty_value,
             )
 

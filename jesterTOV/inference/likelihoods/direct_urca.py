@@ -1,106 +1,94 @@
-r"""Likelihood for enforcing direct Urca process activation at a chosen density.
+r"""Direct-Urca trigger-mass upper-limit likelihood.
 
-This module implements a likelihood that checks whether the direct Urca neutrino
-emission process is active in neutron star matter at a user-specified density.
-Direct Urca operates when the proton fraction exceeds a threshold determined by
-the lepton fractions. EOS configurations where direct Urca is NOT active at
-the target density receive a log-likelihood penalty, while those where it is
-active receive log L = 0.
+This module implements the trigger-mass likelihood developed in
+``Sandbox/durca_likelihood_playground/direct_urca.py``.  The observable is the
+stellar mass at which fast cooling first turns on, :math:`m_{\rm trig}`.  The
+likelihood is the product of upper-limit survival functions,
 
-The user can choose between two reference points:
+.. math::
 
-- ``"n_reference"``: central density of a star with a user-configurable mass
-  (default 1.4 :math:`M_{\odot}`)
-- ``"n_TOV"``: central density of the maximum-mass (TOV) star
+    \mathcal{L}(m_{\rm trig}) = \prod_i \left[1 - F_i(m_{\rm trig})\right].
 
-References
-----------
-Lattimer et al., "Direct URCA process in neutron stars," Phys. Rev. Lett. 66,
-2701 (1991).
+Two physical assumptions are supported:
+
+``"durca_only"``
+    :math:`m_{\rm trig}=m_{\rm dUrca}` only if direct Urca turns on below
+    :math:`M_{\rm TOV}`.  If a CSE transition density ``nbreak`` exists,
+    direct Urca must turn on before the CSE transition.
+
+``"durca_or_cse"``
+    :math:`m_{\rm trig}` is the lower-mass trigger from direct Urca or the CSE
+    transition.  This assumes the CSE branch itself always allows direct Urca,
+    so if ``n_durca > nbreak`` the trigger is ``nbreak``.
 """
 
 from typing import Literal
 
 import jax.numpy as jnp
+from jax.scipy.stats import norm
 from jaxtyping import Array, Float
 
 from jesterTOV import utils
 from jesterTOV.inference.base.likelihood import LikelihoodBase
 
-_NPE_XDU = 1.0 / 9.0  # X_DU in pure npe matter (x_e = 1)
+_NPE_XDU = 1.0 / 9.0
+TriggerAssumption = Literal["durca_only", "durca_or_cse"]
 
 
 class DirectUrcaLikelihood(LikelihoodBase):
-    r"""Penalises EOS configurations where direct Urca is NOT active at a chosen density.
-
-    Direct Urca operates when the proton fraction :math:`Y_p` exceeds the
-    threshold :math:`X_{\rm DU}`, which depends on the lepton composition:
-
-    .. math::
-        X_{\rm DU} = \frac{1}{1 + \bigl(1 + x_e^{1/3}\bigr)^3},
-        \qquad
-        x_e = \frac{Y_e}{Y_e + Y_\mu}
-
-    When lepton fractions are unavailable (approximate beta-equilibrium),
-    pure npe matter (:math:`x_e = 1`) is assumed, giving
-    :math:`X_{\rm DU} = 1/9`.
+    r"""Likelihood for the direct-Urca or CSE trigger mass.
 
     Parameters
     ----------
-    check_type : str
-        Which reference density to check:
-        - ``"n_reference"``: central density of a star with mass = ``reference_mass``
-        - ``"n_TOV"``: central density of the maximum-mass star
-    constraint_type : str, optional
-        Additional compatibility constraint on ``n_durca`` (the density where
-        :math:`Y_p` first reaches :math:`X_{\rm DU}`):
-
-        - ``"none"``: no additional constraint (default, backward compatible).
-        - ``"n_tov"``: require ``n_durca < n_TOV`` (recommended for non-CSE models).
-        - ``"n_break"``: require ``n_durca < n_break`` (recommended for CSE models
-          where ``nbreak`` is available from the EOS).
-    reference_mass : float, optional
-        Stellar mass in :math:`M_{\odot}` at which to evaluate when
-        ``check_type="n_reference"`` (default: 1.4).
-    penalty_value : float, optional
-        Log-likelihood penalty returned when :math:`Y_p < X_{\rm DU}` at the
-        target density (default: -1e5).
-
-    Examples
-    --------
-    .. code-block:: yaml
-
-        - type: "direct_urca"
-          enabled: true
-          check_type: "n_reference"
-          reference_mass: 1.4
-          penalty_value: -1e5
+    trigger_assumption : {"durca_only", "durca_or_cse"}
+        Rule used to convert the direct-Urca onset density and optional CSE
+        transition density into :math:`m_{\rm trig}`.
+    name : str
+        Identifier for this likelihood.
+    penalty_value : float
+        Log-likelihood returned when no valid trigger exists below
+        :math:`M_{\rm TOV}` or required EOS quantities are absent.
 
     Notes
     -----
-    Requires ``proton_fraction``, ``e_fraction``, and ``muon_fraction`` arrays
-    from the EOS transform (these are populated when the EOS model computes
-    beta-equilibrium with muons).  If lepton fractions are missing, the
-    likelihood falls back to the npe-matter threshold :math:`X_{\rm DU} = 1/9`.
+    The transform output must contain ``n_orig`` and ``proton_fraction``.  For
+    the metamodel/skyrme EOS families this requires ``calculate_durca: true``.
+    Electron and muon fractions are used when present; otherwise pure npe
+    matter gives :math:`X_{\rm DU}=1/9`.
     """
-
-    check_type: str
-    constraint_type: str
-    reference_mass: float
-    penalty_value: float
 
     def __init__(
         self,
-        check_type: str = "n_reference",
-        constraint_type: str = "none",
-        reference_mass: float = 1.4,
+        trigger_assumption: TriggerAssumption = "durca_only",
+        name: str = "Direct_Urca_Trigger_Mass",
         penalty_value: float = -1e5,
+        **legacy_kwargs: object,
     ) -> None:
         super().__init__()
-        self.check_type = check_type
-        self.constraint_type = constraint_type
-        self.reference_mass = reference_mass
+        if trigger_assumption not in ("durca_only", "durca_or_cse"):
+            raise ValueError(
+                "trigger_assumption must be 'durca_only' or 'durca_or_cse'"
+            )
+        self.trigger_assumption = trigger_assumption
+        self.name = name
         self.penalty_value = float(penalty_value)
+        self.legacy_kwargs = legacy_kwargs
+
+        # SAX J1808.4-3658 Gaussian mixture
+        self.sax_mu = jnp.array([1.46, 1.98, 1.93, 2.00])
+        self.sax_sig = jnp.array([0.175, 0.130, 0.085, 0.060])
+        self.sax_w = jnp.array([0.25, 0.25, 0.25, 0.25])
+
+        # Cas A Gaussian
+        self.cas_mu = 1.55
+        self.cas_sig = 0.25
+
+        # PSR B2334+61 uniform upper-limit distribution
+        self.b2334_loc = 1.45
+        self.b2334_scale = 1.60 - 1.45
+
+        # Vela uniform distribution; upper support is M_TOV.
+        self.vela_loc = 1.40
 
     @staticmethod
     def _compute_xdu(
@@ -108,176 +96,139 @@ class DirectUrcaLikelihood(LikelihoodBase):
         e_fraction: Float[Array, " n"] | None,
         muon_fraction: Float[Array, " n"] | None,
     ) -> Float[Array, " n"]:
-        r"""Compute the direct Urca threshold :math:`X_{\rm DU}` on the density grid.
+        r"""Compute the direct-Urca threshold :math:`X_{\rm DU}`."""
+        if e_fraction is None or muon_fraction is None:
+            return jnp.full_like(proton_fraction, _NPE_XDU)
 
-        When lepton fractions are available:
+        x_e = e_fraction / (e_fraction + muon_fraction + 1e-30)
+        return 1.0 / (1.0 + (1.0 + jnp.cbrt(x_e)) ** 3)
 
-        .. math::
-            x_e = \frac{Y_e}{Y_e + Y_\mu},
-            \qquad
-            X_{\rm DU} = \frac{1}{1 + (1 + x_e^{1/3})^3}
-
-        When lepton fractions are unavailable (or ``None``), pure npe matter
-        is assumed, giving :math:`X_{\rm DU} = 1/9`.
-
-        Parameters
-        ----------
-        proton_fraction : array
-            Proton fraction array (dimensionless).
-        e_fraction : array or None
-            Electron fraction array, or ``None`` if not computed.
-        muon_fraction : array or None
-            Muon fraction array, or ``None`` if not computed.
-
-        Returns
-        -------
-        array
-            :math:`X_{\rm DU}` threshold at each density point.
-        """
-        # Check if lepton fractions are available
-        if e_fraction is not None and muon_fraction is not None:
-            x_e = e_fraction / (e_fraction + muon_fraction + 1e-30)
-            xdu = 1.0 / (1.0 + (1.0 + jnp.cbrt(x_e)) ** 3)
-        else:
-            # Pure npe matter: x_e = 1 → X_DU = 1/9
-            xdu = jnp.full_like(proton_fraction, _NPE_XDU)
-        return xdu
-
-    def evaluate(self, params: dict[str, Float | Array]) -> Float:
-        r"""Evaluate the direct Urca log-likelihood.
-
-        Returns 0.0 if :math:`Y_p \ge X_{\rm DU}` at the target density, or
-        ``penalty_value`` otherwise.  When ``constraint_type != "none"``, an
-        additional penalty is applied if the onset density of direct Urca
-        (the first point where :math:`Y_p \ge X_{\rm DU}`) violates the
-        chosen bound (``n_TOV`` or ``n_break``).
-
-        Parameters
-        ----------
-        params : dict[str, Float | Array]
-            Dictionary containing EOS and TOV quantities from the transform.
-            Required keys:
-            - ``"proton_fraction"``: proton fraction on density grid
-            - ``"n_orig"``: density grid in fm\ :sup:`-3`
-            - ``"masses_EOS"``: neutron star masses (:math:`M_{\odot}`)
-            - ``"logpc_EOS"``: log\ :sub:`10` of central pressures (geometric)
-            - ``"n"``: density grid (geometric units)
-            - ``"p"``: pressure grid (geometric units)
-
-            Optional keys:
-            - ``"e_fraction"``: electron fraction (if available)
-            - ``"muon_fraction"``: muon fraction (if available)
-            - ``"n_TOV"``: central density at M\ :sub:`TOV` (geometric, only
-              needed for ``check_type="n_TOV"`` or
-              ``constraint_type="n_tov"``)
-            - ``"nbreak"``: break density in fm\ :sup:`-3` (only needed for
-              ``constraint_type="n_break"``; available from CSE prior param
-              or adaptive-CSE extra\_constraints)
-
-        Returns
-        -------
-        Float
-            0.0 if direct Urca is active at the target density and the
-            constraint (if any) is satisfied, or ``penalty_value`` (possibly
-            :math:`\times 2` if both conditions fail).
-        """
-        # Extract arrays from params
-        proton_fraction: Float[Array, " n"] = params["proton_fraction"]
-        n_orig: Float[Array, " n"] = params["n_orig"]
-
-        # Lepton fractions may be None if not computed by the EOS
+    def _find_n_durca(self, params: dict[str, Float | Array]) -> Float:
+        r"""Return first direct-Urca onset density in fm\ :sup:`-3`."""
+        proton_fraction: Float[Array, " n"] = params["proton_fraction"]  # type: ignore[assignment]
+        n_orig: Float[Array, " n"] = params["n_orig"]  # type: ignore[assignment]
         e_fraction: Float[Array, " n"] | None = params.get("e_fraction")  # type: ignore[assignment]
         muon_fraction: Float[Array, " n"] | None = params.get("muon_fraction")  # type: ignore[assignment]
 
-        # Compute X_DU on the full density grid
         xdu = self._compute_xdu(proton_fraction, e_fraction, muon_fraction)
+        active = proton_fraction >= xdu
+        first_idx = jnp.argmax(active)
+        return jnp.where(jnp.any(active), n_orig[first_idx], jnp.inf)
 
-        # Determine target density in fm^-3
-        if self.check_type == "n_reference":
-            # Central pressure log10 at the reference mass
-            masses_eos: Float[Array, " n"] = params["masses_EOS"]
-            logpc_eos: Float[Array, " n"] = params["logpc_EOS"]
-            pc_ref_log10: Float = jnp.interp(self.reference_mass, masses_eos, logpc_eos)
-            pc_ref_geom: Float = 10.0**pc_ref_log10  # geometric units
+    @staticmethod
+    def _mass_at_density(
+        n_trigger_fm3: Float,
+        params: dict[str, Float | Array],
+    ) -> Float:
+        r"""Interpolate stellar mass for a central density in fm\ :sup:`-3`."""
+        n_grid_geom: Float[Array, " n"] = params["n"]  # type: ignore[assignment]
+        p_grid_geom: Float[Array, " n"] = params["p"]  # type: ignore[assignment]
+        logpc_eos: Float[Array, " n"] = params["logpc_EOS"]  # type: ignore[assignment]
+        masses_eos: Float[Array, " n"] = params["masses_EOS"]  # type: ignore[assignment]
 
-            # Interpolate density at that central pressure
-            n_grid: Float[Array, " n"] = params["n"]
-            p_grid: Float[Array, " n"] = params["p"]
-            n_ref_geom: Float = jnp.interp(pc_ref_geom, p_grid, n_grid)  # geometric
-            n_target_fm3: Float = n_ref_geom * utils.geometric_to_fm_inv3  # fm^-3
+        n_trigger_geom = n_trigger_fm3 * utils.fm_inv3_to_geometric
+        pc_trigger = jnp.interp(n_trigger_geom, n_grid_geom, p_grid_geom)
+        logpc_trigger = jnp.log10(pc_trigger)
+        return jnp.interp(logpc_trigger, logpc_eos, masses_eos)
 
-        elif self.check_type == "n_TOV":
-            # n_TOV is already computed by the transform (in geometric units)
-            n_tov_geom: Float = params["n_TOV"]  # type: ignore[assignment]
-            n_target_fm3: Float = n_tov_geom * utils.geometric_to_fm_inv3  # fm^-3
+    @staticmethod
+    def _cse_transition_density(
+        params: dict[str, Float | Array],
+    ) -> tuple[Float, bool]:
+        r"""Return the effective CSE transition density in fm\ :sup:`-3`.
 
-        else:
-            raise ValueError(
-                f"Unknown check_type: '{self.check_type}'. "
-                "Expected 'n_reference' or 'n_TOV'."
-            )
+        Manual CSE/peakCSE models preserve the sampled ``nbreak`` parameter in
+        the transform output.  Adaptive CSE models expose their causality-driven
+        transition density via ``extra_constraints["nbreak"]``, which the
+        transform flattens to the same key.
+        """
+        if "nbreak" not in params:
+            return jnp.asarray(jnp.inf), False
+        return jnp.asarray(params["nbreak"]), True
 
-        # Interpolate Y_p and X_DU at the target density
-        # n_orig is in fm^-3, n_target_fm3 is in fm^-3 → same units
-        yp_target: Float = jnp.interp(n_target_fm3, n_orig, proton_fraction)
-        xdu_target: Float = jnp.interp(n_target_fm3, n_orig, xdu)
+    def _select_trigger_density(
+        self,
+        n_durca_fm3: Float,
+        n_tov_fm3: Float,
+        params: dict[str, Float | Array],
+    ) -> tuple[Float, Float]:
+        r"""Return ``(n_trig, valid)`` under the configured assumption."""
+        n_cse_fm3, has_cse_transition = self._cse_transition_density(params)
 
-        # Apply penalty if Y_p < X_DU (direct Urca NOT active)
+        if self.trigger_assumption == "durca_only":
+            before_tov = n_durca_fm3 < n_tov_fm3
+            before_cse = n_durca_fm3 <= n_cse_fm3 if has_cse_transition else True
+            before_break = before_cse
+            valid = jnp.logical_and(before_tov, before_break)
+            return n_durca_fm3, valid
+
+        n_trig_fm3 = jnp.minimum(n_durca_fm3, n_cse_fm3)
+        valid = n_trig_fm3 < n_tov_fm3
+        return n_trig_fm3, valid
+
+    def _log_survival_likelihood(self, m_trig: Float, mtov: Float) -> Float:
+        r"""Evaluate the playground upper-limit likelihood at ``m_trig``."""
+        z_sax = (m_trig[..., None] - self.sax_mu) / self.sax_sig
+        cdf_sax = jnp.sum(self.sax_w * norm.cdf(z_sax), axis=-1)
+        log_sf_sax = jnp.log(jnp.maximum(1.0 - cdf_sax, 1e-300))
+
+        z_cas = (m_trig - self.cas_mu) / self.cas_sig
+        log_sf_cas = norm.logcdf(-z_cas)
+
+        cdf_b2334 = jnp.minimum(
+            jnp.maximum((m_trig - self.b2334_loc) / self.b2334_scale, 0.0),
+            1.0,
+        )
+        log_sf_b2334 = jnp.log(jnp.maximum(1.0 - cdf_b2334, 1e-300))
+
+        vela_scale = mtov - self.vela_loc
+        cdf_vela = jnp.minimum(
+            jnp.maximum((m_trig - self.vela_loc) / vela_scale, 0.0),
+            1.0,
+        )
+        log_sf_vela = jnp.log(jnp.maximum(1.0 - cdf_vela, 1e-300))
+
+        return log_sf_sax + log_sf_cas + log_sf_b2334 + log_sf_vela
+
+    def evaluate(self, params: dict[str, Float | Array]) -> Float:
+        r"""Evaluate the log-likelihood for the selected trigger assumption."""
+        required = (
+            "n_orig",
+            "proton_fraction",
+            "n",
+            "p",
+            "masses_EOS",
+            "logpc_EOS",
+            "n_TOV",
+        )
+        if any(key not in params for key in required):
+            return jnp.asarray(self.penalty_value)
+
+        n_tov_geom: Float = params["n_TOV"]  # type: ignore[assignment]
+        n_tov_fm3 = n_tov_geom * utils.geometric_to_fm_inv3
+        mtov = jnp.max(params["masses_EOS"])  # type: ignore[arg-type]
+
+        n_durca_fm3 = self._find_n_durca(params)
+        n_trig_fm3, valid_trigger = self._select_trigger_density(
+            n_durca_fm3, n_tov_fm3, params
+        )
+        m_trig = self._mass_at_density(n_trig_fm3, params)
+
+        invalid_mass = jnp.logical_or(m_trig <= 0.0, m_trig >= mtov)
+        valid = jnp.logical_and(valid_trigger, ~invalid_mass)
         log_likelihood = jnp.where(
-            yp_target >= xdu_target,
-            0.0,  # Direct Urca active → no penalty
-            self.penalty_value,  # Direct Urca inactive → apply penalty
+            valid,
+            self._log_survival_likelihood(m_trig, mtov),
+            self.penalty_value,
         )
 
-        # =====================================================================
-        # Additional constraint on the direct Urca onset density (n_durca)
-        # =====================================================================
-        if self.constraint_type != "none":
-            # n_durca: first density where Yp >= X_DU (in fm^-3)
-            yp_active: Float[Array, " n"] = proton_fraction >= xdu
-            first_idx: Float = jnp.argmax(yp_active)  # 0 if all-False
-            n_durca: Float = jnp.where(
-                jnp.any(yp_active),
-                n_orig[first_idx],
-                jnp.inf,  # never crosses → infinite penalty bound
-            )
-
-            n_tov_fm3: Float = (
-                params["n_TOV"] * utils.geometric_to_fm_inv3  # type: ignore[assignment]
-            )
-
-            if self.constraint_type == "n_tov":
-                # Penalise if n_durca is at or above n_TOV
-                log_likelihood = log_likelihood + jnp.where(
-                    n_durca >= n_tov_fm3,
-                    self.penalty_value,
-                    0.0,
-                )
-
-            elif self.constraint_type == "n_break":
-                # nbreak is expected in fm^-3 from the EOS or prior
-                nbreak: Float = params["nbreak"]  # type: ignore[assignment]
-                log_likelihood = log_likelihood + jnp.where(
-                    n_durca >= nbreak,
-                    # n_durca < nbreak is the desired physical behaviour:
-                    # the CSE extension should begin before (or at) the
-                    # density where Urca turns on.
-                    self.penalty_value,
-                    0.0,
-                )
-
-            else:
-                raise ValueError(
-                    f"Unknown constraint_type: '{self.constraint_type}'. "
-                    "Expected 'none', 'n_tov', or 'n_break'."
-                )
-
-        # Safety net for NaN from interpolation (e.g., target outside grid)
-        log_likelihood = jnp.nan_to_num(
+        return jnp.nan_to_num(
             log_likelihood,
             nan=self.penalty_value,
             posinf=self.penalty_value,
             neginf=self.penalty_value,
         )
 
-        return log_likelihood
+
+class MtrigUpperLikelihood(DirectUrcaLikelihood):
+    """Backward-compatible alias for the playground likelihood name."""

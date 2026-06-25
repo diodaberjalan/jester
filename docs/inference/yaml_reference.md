@@ -572,27 +572,26 @@ Apply bounds on spectral decomposition Gamma parameters, enforcing causality and
 
 ::::
 
-### Direct Urca constraints
+### Direct Urca trigger-mass likelihood
 
-Penalise EOS configurations where the direct Urca process is **not** active at a chosen reference density. The check compares the proton fraction $Y_p$ against the direct Urca threshold $X_{\rm DU}$ at the target density. See {class}`~jesterTOV.inference.likelihoods.direct_urca.DirectUrcaLikelihood` for the full API.
+Evaluate an upper-limit likelihood for the trigger mass $m_{\rm trig}$ where direct Urca cooling turns on. See {class}`~jesterTOV.inference.likelihoods.direct_urca.DirectUrcaLikelihood` for the full API.
 
 ::::{dropdown} **Direct Urca likelihood**
 
 ```yaml
 - type: "direct_urca"
   enabled: true
-  check_type: "n_reference"   # or "n_TOV" (default: "n_reference")
-  reference_mass: 1.4          # solar masses, only used when check_type="n_reference" (default: 1.4)
-  penalty_value: -1e5          # Log-likelihood penalty when Y_p < X_DU (default: -1e5)
+  trigger_assumption: "durca_only"  # or "durca_or_cse" (default: "durca_only")
+  penalty_value: -1e5               # Log-likelihood penalty when no valid trigger exists
 ```
 
 **Field Details:**
 
-- **`check_type`** (`"n_reference"` | `"n_TOV"`, default: `"n_reference"`) - Which central density to check:
-  - `"n_reference"`: central density of a neutron star with mass = `reference_mass`
-  - `"n_TOV"`: central density of the maximum-mass (TOV) star
-- **`reference_mass`** (`float`, default: `1.4`) - Stellar mass in $M_\odot$ at which to evaluate when `check_type="n_reference"`. Can be set to e.g. `1.2`, `1.6`, etc.
-- **`penalty_value`** (`float`, default: `-1e5`) - Log-likelihood penalty applied when $Y_p < X_{\rm DU}$ at the target density
+- **`trigger_assumption`** (`"durca_only"` | `"durca_or_cse"`, default: `"durca_only"`) - How to define $m_{\rm trig}$:
+  - `"durca_only"`: $m_{\rm trig}=m_{\rm dUrca}$ only when $n_{\rm dUrca}<n_{\rm TOV}$ and, if `nbreak` exists, $n_{\rm dUrca}\le n_{\rm break}$
+  - `"durca_or_cse"`: $m_{\rm trig}$ is set by the lower of $n_{\rm dUrca}$ and `nbreak`; if both are above $n_{\rm TOV}$, the likelihood is zero
+- **`name`** (`str`, default: `"Direct_Urca_Trigger_Mass"`) - Identifier for this likelihood
+- **`penalty_value`** (`float`, default: `-1e5`) - Log-likelihood penalty applied when no valid trigger exists below $M_{\rm TOV}$ or required EOS quantities are missing
 
 **Description:**
 
@@ -600,9 +599,9 @@ Direct Urca neutrino emission operates when the proton fraction exceeds a lepton
 
 $$X_{\rm DU} = \frac{1}{1 + (1 + x_e^{1/3})^3}, \qquad x_e = \frac{Y_e}{Y_e + Y_\mu}$$
 
-The likelihood checks whether $Y_p \ge X_{\rm DU}$ at the chosen reference density. If the condition is satisfied (direct Urca is active), the log-likelihood is $0$ (no penalty). If not, the penalty value is returned.
+The likelihood finds the first density where $Y_p \ge X_{\rm DU}$ and converts the selected trigger density to a stellar mass using the EOS pressure grid and TOV mass-central-pressure curve. The returned log likelihood is the sum of survival-function terms from the trigger-mass upper-limit distributions.
 
-This likelihood requires that the EOS model computes beta-equilibrium with muons and has `calculate_durca: true` in the EOS configuration, as the `proton_fraction`, `e_fraction`, and `muon_fraction` arrays must be present in the transform output. If lepton fractions are unavailable, the pure npe-matter threshold $X_{\rm DU} = 1/9$ is used as a fallback.
+This likelihood requires `calculate_durca: true` in the EOS configuration so `n_orig` and `proton_fraction` are present in the transform output. If lepton fractions are unavailable, the pure npe-matter threshold $X_{\rm DU}=1/9$ is used as a fallback. The legacy fields `check_type`, `constraint_type`, and `reference_mass` are still accepted by the schema for older configs but are ignored by the trigger-mass likelihood.
 
 ::::
 
