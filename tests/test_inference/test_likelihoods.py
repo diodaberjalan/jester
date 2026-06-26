@@ -540,6 +540,33 @@ class TestChiEFTLikelihood:
         high_pressure = likelihood.EFT_high(test_density)
         assert low_pressure < high_pressure  # Low bound should be less than high bound
 
+    def test_chieft_returns_neutral_when_nucleonic_segment_below_domain(self):
+        """No chiEFT penalty is applied if CSE starts below 0.75 n_sat."""
+        likelihood = ChiEFTLikelihood(nb_n=16)
+        params = {
+            "n": jnp.linspace(0.1, 3.0, 64) * 0.16 * utils.fm_inv3_to_geometric,
+            "p": jnp.linspace(0.1, 20.0, 64) * utils.MeV_fm_inv3_to_geometric,
+            "nbreak": 0.5 * 0.16,
+        }
+
+        result = likelihood.evaluate(params)
+
+        assert jnp.isfinite(result)
+        assert result == 0.0
+
+    def test_chieft_finite_when_cse_starts_inside_domain(self):
+        """chiEFT evaluates only up to nbreak when CSE starts below 2 n_sat."""
+        likelihood = ChiEFTLikelihood(nb_n=16)
+        params = {
+            "n": jnp.linspace(0.1, 3.0, 64) * 0.16 * utils.fm_inv3_to_geometric,
+            "p": jnp.linspace(0.1, 20.0, 64) * utils.MeV_fm_inv3_to_geometric,
+            "nbreak": 1.2 * 0.16,
+        }
+
+        result = likelihood.evaluate(params)
+
+        assert jnp.isfinite(result)
+
 
 class TestRadioTimingLikelihood:
     """Test RadioTimingLikelihood functionality."""

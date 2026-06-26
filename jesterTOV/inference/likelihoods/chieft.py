@@ -95,8 +95,11 @@ class ChiEFTLikelihood(LikelihoodBase):
 
     where β = 6/(p_high - p_low) controls the penalty strength.
 
-    The integration is performed from 0.75 n_sat (lower limit of chiEFT validity)
-    to nbreak (where the CSE extension begins, if present).
+    The integration is performed only on the nucleonic EOS segment where it
+    overlaps the chiEFT validity domain, from 0.75 n_sat to
+    ``min(nbreak, n_max_nsat)``. If the CSE transition happens below
+    0.75 n_sat, the overlap is empty and the likelihood returns 0.0 rather
+    than extrapolating or penalising the CSE branch.
 
     See Also
     --------
@@ -174,6 +177,8 @@ class ChiEFTLikelihood(LikelihoodBase):
             - "n" : Baryon number density grid (geometric units, i.e. fm⁻³ × ``utils.fm_inv3_to_geometric``)
             - "p" : Pressure values on density grid (geometric units, i.e. MeV/fm³ × ``utils.MeV_fm_inv3_to_geometric``)
             - "nbreak" : Breaking density where CSE begins (fm⁻³, physical units)
+              when a CSE extension is present. If absent, the full chiEFT data
+              range is used.
 
         Returns
         -------
@@ -188,22 +193,21 @@ class ChiEFTLikelihood(LikelihoodBase):
         n_sat (saturation density = 0.16 fm⁻³).  Input quantities are
         converted at the start:
 
-        - ``nbreak`` [fm⁻³] → ``nbreak / 0.16`` [n_sat]
+        - ``nbreak`` [fm⁻³] → ``nbreak / 0.16`` [n_sat], if present
         - ``n`` [geometric] → ``n / fm_inv3_to_geometric / 0.16`` [n_sat]
         - ``p`` [geometric] → ``p / MeV_fm_inv3_to_geometric`` [MeV/fm³]
 
-        The integration runs from 0.75 n_sat (lower limit of chiEFT validity)
-        to ``min(nbreak, n_max_nsat)`` [n_sat] using ``nb_n`` equally spaced
-        points. The upper limit is capped at ``n_max_nsat`` (2.0 n_sat for the
-        default Koehn et al. 2025 bands) to avoid integrating over the flat
-        constant extrapolation that ``jnp.interp`` produces beyond the data
-        range, which has no physical meaning. If ``nbreak`` falls below
-        0.75 n_sat the upper limit is clamped to ``0.75 + 1e-8`` n_sat to
-        prevent a degenerate integration range.
+        The integration runs only over the overlap between the nucleonic EOS
+        segment and the chiEFT validity interval:
+        ``[0.75, min(nbreak, n_max_nsat)]`` in n_sat units. The upper limit is
+        capped at ``n_max_nsat`` (2.0 n_sat for the default Koehn et al. 2025
+        bands) to avoid flat extrapolation from ``jnp.interp``. If ``nbreak``
+        falls at or below 0.75 n_sat, there is no nucleonic segment in the
+        chiEFT validity interval, so the likelihood returns 0.0.
         """
         # Get relevant parameters
         n, p = params["n"], params["p"]
-        nbreak = params["nbreak"]
+        nbreak = params.get("nbreak", self.n_max_nsat * 0.16)
 
         # Convert all densities to n_sat units (n_sat = 0.16 fm^-3).
         # nbreak arrives in fm^-3 (physical); n arrives in geometric units.
@@ -218,11 +222,17 @@ class ChiEFTLikelihood(LikelihoodBase):
         # Both nbreak and n_max_nsat are in n_sat units at this point.
         n_upper = jnp.minimum(nbreak, self.n_max_nsat)
 
-        # Guard against a degenerate integration range when nbreak < 0.75 n_sat.
-        n_upper = jnp.maximum(n_upper, 0.75 + 1e-8)
+        # Use a finite dummy upper limit for the no-overlap case. The final
+        # jnp.where below returns exactly 0.0 whenever the physical overlap is
+        # empty, but JAX evaluates both branches so the intermediate arithmetic
+        # must remain finite.
+        overlap_width = n_upper - 0.75
+        has_overlap = overlap_width > 0.0
+        safe_width = jnp.maximum(overlap_width, 1e-8)
+        n_upper_safe = 0.75 + safe_width
 
         # Build density grid in n_sat units: lower limit is 0.75 n_sat.
-        this_n_array = jnp.linspace(0.75, n_upper, self.nb_n)
+        this_n_array = jnp.linspace(0.75, n_upper_safe, self.nb_n)
         dn = this_n_array.at[1].get() - this_n_array.at[0].get()
         low_p = self.EFT_low(this_n_array)
         high_p = self.EFT_high(this_n_array)
@@ -241,7 +251,11 @@ class ChiEFTLikelihood(LikelihoodBase):
         f_array = f(sample_p, low_p, high_p)
         # Normalise by the integration width (in n_sat units).
         # n_upper and 0.75 are both in n_sat units here.
-        prefactor = 1 / (n_upper - 0.75)
-        log_likelihood = prefactor * jnp.sum(f_array) * dn
+        prefactor = 1 / safe_width
+        log_likelihood = jnp.where(
+            has_overlap,
+            prefactor * jnp.sum(f_array) * dn,
+            0.0,
+        )
 
-        return log_likelihood
+        return jnp.nan_to_num(log_likelihood, nan=0.0, posinf=0.0, neginf=0.0)
