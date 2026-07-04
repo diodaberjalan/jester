@@ -20,13 +20,14 @@ from ..config.schema import (
     ZeroLikelihoodConfig,
     MaxMassBoundsLikelihoodConfig,
     DirectUrcaLikelihoodConfig,
+    MtrigLowerLikelihoodConfig,
 )
 from .combined import CombinedLikelihood, ZeroLikelihood
 from .gw import GWLikelihood, GWLikelihoodResampled
 from .nicer import NICERLikelihood, NICERKDELikelihood
 from .radio import RadioTimingLikelihood, MaxMassBoundsLikelihood
 from .chieft import ChiEFTLikelihood
-from .direct_urca import DirectUrcaLikelihood
+from .direct_urca import DirectUrcaLikelihood, MtrigLowerLikelihood
 from .constraints import (
     ConstraintEOSLikelihood,
     ConstraintTOVLikelihood,
@@ -208,6 +209,13 @@ def create_likelihood(
 
         case DirectUrcaLikelihoodConfig():
             return DirectUrcaLikelihood(
+                trigger_assumption=config.trigger_assumption,
+                name=config.name,
+                penalty_value=config.penalty_value,
+            )
+
+        case MtrigLowerLikelihoodConfig():
+            return MtrigLowerLikelihood(
                 trigger_assumption=config.trigger_assumption,
                 name=config.name,
                 penalty_value=config.penalty_value,

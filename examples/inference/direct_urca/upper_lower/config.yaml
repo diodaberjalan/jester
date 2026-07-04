@@ -1,0 +1,52 @@
+seed: 43
+dry_run: false
+validate_only: false
+
+eos:
+  type: metamodel_adaptive_cse
+  calculate_durca: true
+  proton_fraction: exact
+  ndat_metamodel: 100
+  nmax_nsat: 25.0
+  nb_CSE: 4
+  ndat_CSE: 100
+  cs2_high_threshold: 0.95
+  cs2_low_threshold: 0.05
+  min_nbreak_nsat: 2.0
+  crust_name: DH
+
+tov:
+  type: gr
+  min_nsat_TOV: 0.75
+  ndat_TOV: 100
+  nb_masses: 100
+
+prior:
+  specification_file: prior.prior
+
+likelihoods:
+- type: constraints_eos
+  enabled: true
+- type: direct_urca
+  enabled: true
+  trigger_assumption: durca_or_cse
+  penalty_value: -1e5
+- type: mtrig_lower
+  enabled: true
+  trigger_assumption: durca_or_cse
+  penalty_value: -1e5
+
+sampler:
+  type: smc-rw
+  n_particles: 200
+  n_mcmc_steps: 5
+  target_ess: 0.9
+  random_walk_sigma: 0.1
+  output_dir: ./outdir/
+
+postprocessing:
+  enabled: true
+  plot_format: png
+  make_cornerplot: false
+  make_massradius: true
+  make_pressuredensity: true

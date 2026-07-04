@@ -942,6 +942,51 @@ class DirectUrcaLikelihoodConfig(BaseLikelihoodConfig):
     )
 
 
+class MtrigLowerLikelihoodConfig(BaseLikelihoodConfig):
+    r"""Trigger-mass lower-bound likelihood configuration.
+
+    Evaluates the lower-bound likelihood for :math:`m_{\rm trig}` from
+    non-rapid-cooling objects. The trigger mass itself is computed using the
+    same direct-Urca/CSE trigger assumptions as ``direct_urca``.
+
+    Examples
+    --------
+    .. code-block:: yaml
+
+        - type: "mtrig_lower"
+          enabled: true
+          trigger_assumption: "durca_only"
+          penalty_value: -1e5
+    """
+
+    type: Literal["mtrig_lower"] = Field(
+        default="mtrig_lower", description="Likelihood type identifier"
+    )
+
+    trigger_assumption: Literal["durca_only", "durca_or_cse"] = Field(
+        default="durca_only",
+        description=(
+            "How to define m_trig before applying the lower-bound likelihood. "
+            "'durca_only': require n_durca below n_TOV and, when nbreak exists, "
+            "below nbreak. 'durca_or_cse': use n_durca or nbreak, whichever "
+            "triggers first below n_TOV."
+        ),
+    )
+
+    name: str = Field(
+        default="Mtrig_Lower_Bound",
+        description="Identifier for this likelihood constraint",
+    )
+
+    penalty_value: float = Field(
+        default=-1e5,
+        description=(
+            "Log-likelihood penalty returned when no valid trigger exists below "
+            "M_TOV or required direct-Urca quantities are missing (default: -1e5)."
+        ),
+    )
+
+
 class ZeroLikelihoodConfig(BaseLikelihoodConfig):
     """Zero likelihood configuration for prior-only sampling.
 
@@ -978,6 +1023,7 @@ LikelihoodConfig = Annotated[
         REXLikelihoodConfig,
         MaxMassBoundsLikelihoodConfig,
         DirectUrcaLikelihoodConfig,
+        MtrigLowerLikelihoodConfig,
         ZeroLikelihoodConfig,
     ],
     Discriminator("type"),

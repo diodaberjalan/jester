@@ -1,13 +1,20 @@
-r"""Direct-Urca trigger-mass upper-limit likelihood.
+r"""Direct-Urca trigger-mass likelihoods.
 
-This module implements the trigger-mass likelihood developed in
+This module implements trigger-mass likelihoods developed in
 ``Sandbox/durca_likelihood_playground/direct_urca.py``.  The observable is the
 stellar mass at which fast cooling first turns on, :math:`m_{\rm trig}`.  The
-likelihood is the product of upper-limit survival functions,
+upper-bound likelihood is the product of survival functions,
 
 .. math::
 
-    \mathcal{L}(m_{\rm trig}) = \prod_i \left[1 - F_i(m_{\rm trig})\right].
+    \mathcal{L}_{\rm upper}(m_{\rm trig})
+    = \prod_i \left[1 - F_i(m_{\rm trig})\right].
+
+The lower-bound likelihood uses a non-rapid-cooling object and evaluates
+
+.. math::
+
+    \mathcal{L}_{\rm lower}(m_{\rm trig}) = F_{\rm HESS}(m_{\rm trig}).
 
 Two physical assumptions are supported:
 
@@ -36,7 +43,7 @@ TriggerAssumption = Literal["durca_only", "durca_or_cse"]
 
 
 class DirectUrcaLikelihood(LikelihoodBase):
-    r"""Likelihood for the direct-Urca or CSE trigger mass.
+    r"""Upper-bound likelihood for the direct-Urca or CSE trigger mass.
 
     Parameters
     ----------
@@ -190,6 +197,10 @@ class DirectUrcaLikelihood(LikelihoodBase):
 
         return log_sf_sax + log_sf_cas + log_sf_b2334 + log_sf_vela
 
+    def _log_mtrig_likelihood(self, m_trig: Float, mtov: Float) -> Float:
+        r"""Evaluate the trigger-mass likelihood at ``m_trig``."""
+        return self._log_survival_likelihood(m_trig, mtov)
+
     def evaluate(self, params: dict[str, Float | Array]) -> Float:
         r"""Evaluate the log-likelihood for the selected trigger assumption."""
         required = (
@@ -218,7 +229,7 @@ class DirectUrcaLikelihood(LikelihoodBase):
         valid = jnp.logical_and(valid_trigger, ~invalid_mass)
         log_likelihood = jnp.where(
             valid,
-            self._log_survival_likelihood(m_trig, mtov),
+            self._log_mtrig_likelihood(m_trig, mtov),
             self.penalty_value,
         )
 
@@ -232,3 +243,65 @@ class DirectUrcaLikelihood(LikelihoodBase):
 
 class MtrigUpperLikelihood(DirectUrcaLikelihood):
     """Backward-compatible alias for the playground likelihood name."""
+
+
+class MtrigLowerLikelihood(DirectUrcaLikelihood):
+    r"""Lower-bound likelihood for the direct-Urca or CSE trigger mass.
+
+    This likelihood evaluates the consistency of :math:`m_{\rm trig}` against
+    lower limits from non-rapid-cooling objects. Since these objects have not
+    triggered rapid cooling, their mass must be below :math:`m_{\rm trig}`.
+
+    The likelihood is:
+
+    .. math::
+
+        \mathcal{L}(m_{\rm trig}) = F_{\rm HESS}(m_{\rm trig}).
+    """
+
+    def __init__(
+        self,
+        trigger_assumption: TriggerAssumption = "durca_only",
+        name: str = "Mtrig_Lower_Bound",
+        penalty_value: float = -1e5,
+    ) -> None:
+        super().__init__(
+            trigger_assumption=trigger_assumption,
+            name=name,
+            penalty_value=penalty_value,
+        )
+
+        # HESS non-rapid-cooling object (Gaussian).
+        self.hess_mu = 0.77
+        self.hess_sig = 0.20
+
+    def _log_mtrig_likelihood(self, m_trig: Float, mtov: Float) -> Float:
+        r"""Evaluate the HESS lower-bound likelihood at ``m_trig``."""
+        del mtov
+        z_hess = (m_trig - self.hess_mu) / self.hess_sig
+        return norm.logcdf(z_hess)
+
+    def evaluate(self, params: dict[str, Float | Array]) -> Float:
+        r"""Evaluate the lower-bound trigger-mass log-likelihood.
+
+        If ``params["m_trig"]`` is present, it is used directly. Otherwise the
+        trigger mass is computed from the EOS/TOV quantities via the inherited
+        direct-Urca/CSE trigger logic.
+        """
+        if "m_trig" not in params:
+            return super().evaluate(params)
+
+        m_trig: Float = params["m_trig"]  # type: ignore[assignment]
+        invalid_mass = m_trig <= 0.0
+        log_likelihood = jnp.where(
+            invalid_mass,
+            self.penalty_value,
+            self._log_mtrig_likelihood(m_trig, jnp.asarray(jnp.nan)),
+        )
+
+        return jnp.nan_to_num(
+            log_likelihood,
+            nan=self.penalty_value,
+            posinf=self.penalty_value,
+            neginf=self.penalty_value,
+        )

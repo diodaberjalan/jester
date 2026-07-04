@@ -22,7 +22,10 @@ from jesterTOV.inference.likelihoods.constraints import (
 )
 from jesterTOV.inference.likelihoods.chieft import ChiEFTLikelihood
 from jesterTOV.inference.likelihoods.radio import RadioTimingLikelihood, MaxMassBoundsLikelihood
-from jesterTOV.inference.likelihoods.direct_urca import DirectUrcaLikelihood
+from jesterTOV.inference.likelihoods.direct_urca import (
+    DirectUrcaLikelihood,
+    MtrigLowerLikelihood,
+)
 from jesterTOV import utils
 from jesterTOV.inference.base import LikelihoodBase
 
@@ -1427,3 +1430,51 @@ class TestDirectUrcaTriggerMassLikelihood:
         assert isinstance(likelihood, DirectUrcaLikelihood)
         assert likelihood.trigger_assumption == "durca_or_cse"
         assert likelihood.penalty_value == -123.0
+
+    def test_mtrig_lower_valid_trigger_returns_finite(self):
+        likelihood = MtrigLowerLikelihood(
+            trigger_assumption="durca_or_cse", penalty_value=-1e5
+        )
+
+        result = likelihood.evaluate(self._mock_params(nbreak=0.25))
+
+        assert jnp.isfinite(result)
+        assert result > -1e5
+
+    def test_mtrig_lower_accepts_direct_m_trig(self):
+        likelihood = MtrigLowerLikelihood(penalty_value=-1e5)
+
+        result = likelihood.evaluate({"m_trig": jnp.asarray(1.2)})
+
+        assert jnp.isfinite(result)
+        assert result > -1e5
+
+    def test_mtrig_lower_direct_m_trig_invalid_mass(self):
+        likelihood = MtrigLowerLikelihood(penalty_value=-1e5)
+
+        result = likelihood.evaluate({"m_trig": jnp.asarray(0.0)})
+
+        assert result == -1e5
+
+    def test_mtrig_lower_invalid_trigger_returns_penalty(self):
+        likelihood = MtrigLowerLikelihood(
+            trigger_assumption="durca_or_cse", penalty_value=-1e5
+        )
+        params = self._mock_params(nbreak=0.60)
+        params["proton_fraction"] = jnp.array([0.05, 0.08, 0.10, 0.10, 0.10])
+
+        result = likelihood.evaluate(params)
+
+        assert result == -1e5
+
+    def test_factory_creates_mtrig_lower_likelihood(self):
+        config = schema.MtrigLowerLikelihoodConfig(
+            trigger_assumption="durca_only",
+            penalty_value=-321.0,
+        )
+
+        likelihood = factory.create_likelihood(config)
+
+        assert isinstance(likelihood, MtrigLowerLikelihood)
+        assert likelihood.trigger_assumption == "durca_only"
+        assert likelihood.penalty_value == -321.0

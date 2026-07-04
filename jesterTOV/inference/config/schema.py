@@ -65,6 +65,7 @@ from .schemas.likelihoods import (
     REXLikelihoodConfig,
     MaxMassBoundsLikelihoodConfig,
     DirectUrcaLikelihoodConfig,
+    MtrigLowerLikelihoodConfig,
     ZeroLikelihoodConfig,
     LikelihoodConfig,
 )
@@ -269,6 +270,7 @@ __all__ = [
     "REXLikelihoodConfig",
     "MaxMassBoundsLikelihoodConfig",
     "DirectUrcaLikelihoodConfig",
+    "MtrigLowerLikelihoodConfig",
     "ZeroLikelihoodConfig",
     "LikelihoodConfig",
     # Samplers

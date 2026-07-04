@@ -605,6 +605,35 @@ This likelihood requires `calculate_durca: true` in the EOS configuration so `n_
 
 ::::
 
+### Trigger-mass lower-bound likelihood
+
+Evaluate a lower-bound likelihood for $m_{\rm trig}$ from non-rapid-cooling objects. This uses the same direct-Urca/CSE trigger-mass calculation as `direct_urca`, then applies the HESS lower-bound CDF. See {class}`~jesterTOV.inference.likelihoods.direct_urca.MtrigLowerLikelihood` for the full API.
+
+::::{dropdown} **Mtrig lower-bound likelihood**
+
+```yaml
+- type: "mtrig_lower"
+  enabled: true
+  trigger_assumption: "durca_only"  # or "durca_or_cse" (default: "durca_only")
+  penalty_value: -1e5
+```
+
+**Field Details:**
+
+- **`trigger_assumption`** (`"durca_only"` | `"durca_or_cse"`, default: `"durca_only"`) - How to define $m_{\rm trig}$ before applying the lower-bound likelihood. The semantics match `direct_urca`.
+- **`name`** (`str`, default: `"Mtrig_Lower_Bound"`) - Identifier for this likelihood
+- **`penalty_value`** (`float`, default: `-1e5`) - Log-likelihood penalty applied when no valid trigger exists below $M_{\rm TOV}$ or required EOS quantities are missing
+
+**Description:**
+
+For the HESS non-rapid-cooling object, the likelihood is:
+
+$$\mathcal{L}(m_{\rm trig}) = F_{\rm HESS}(m_{\rm trig})$$
+
+where $F_{\rm HESS}$ is a Gaussian CDF with mean $0.77 M_\odot$ and standard deviation $0.20 M_\odot$.
+
+::::
+
 ### Prior-only sampling
 
 Sample from the prior without applying observational constraints.
