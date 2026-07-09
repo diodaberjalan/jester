@@ -9,6 +9,7 @@ from typing import Union
 from jesterTOV import utils
 from jesterTOV.eos.base import Interpolate_EOS_model
 from jesterTOV.eos.crust import Crust
+from jesterTOV.eos.skyrme.neps import compute_skyrme_neps_from_params
 from jesterTOV.tov.data_classes import EOSData
 from jesterTOV.logging_config import get_logger
 
@@ -697,6 +698,7 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
             "n_orig": self.n_Skyrme,
             "proton_fraction": proton_fraction,
         }
+        extra.update(compute_skyrme_neps_from_params(params, nsat=self.nsat))
         if self.with_muon and e_fraction is not None:
             extra["e_fraction"] = e_fraction
             extra["muon_fraction"] = muon_fraction
