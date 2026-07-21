@@ -47,15 +47,25 @@ meta   = data['metadata'].item()
 
 ## PSR J0437−4715
 
-**Paper:** Choudhury et al. 2024, "A NICER View of the Nearest and Brightest Millisecond Pulsar: PSR J0437-4715"
+### Amsterdam group — Choudhury et al. 2024
 **Zenodo:** https://zenodo.org/records/13766753
-**Group:** Amsterdam (X-PSI)
 **Data:** NICER-only
 **Hotspot model:** CST+PDT (headline result, 3C50 background with AGN model)
 **Source file:** `headline_result_samples_and_contours.tar.gz` → equal-weight samples
 
 Files:
 - `J04374715_amsterdam_CST_PDT_NICER_only_Choudhury2024.npz`
+
+### Maryland group — Miller, Dittmann, Holt et al. 2026
+**Zenodo:** https://zenodo.org/records/17833896
+**Data:** NICER-only
+**Hotspot model:** 3-spot+GPL (headline result)
+**Source file:** `J0437_NICER_RM.txt` — raw file stores importance weights
+alongside mass and radius, so the extraction script importance-resamples it to
+an equal-weight posterior before saving.
+
+Files:
+- `J04374715_maryland_3spotGPL_NICER_only_RM.npz`
 
 ---
 
