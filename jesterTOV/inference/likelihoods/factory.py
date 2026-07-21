@@ -212,6 +212,10 @@ def create_likelihood(
                 trigger_assumption=config.trigger_assumption,
                 name=config.name,
                 penalty_value=config.penalty_value,
+                nstar_min_nsat=config.nstar_min_nsat,
+                nstar_max_nsat=config.nstar_max_nsat,
+                nb_ncool=config.nb_ncool,
+                nb_nstar=config.nb_nstar,
             )
 
         case MtrigLowerLikelihoodConfig():
@@ -219,6 +223,10 @@ def create_likelihood(
                 trigger_assumption=config.trigger_assumption,
                 name=config.name,
                 penalty_value=config.penalty_value,
+                nstar_min_nsat=config.nstar_min_nsat,
+                nstar_max_nsat=config.nstar_max_nsat,
+                nb_ncool=config.nb_ncool,
+                nb_nstar=config.nb_nstar,
             )
 
         case ZeroLikelihoodConfig():

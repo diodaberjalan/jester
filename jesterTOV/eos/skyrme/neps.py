@@ -63,7 +63,9 @@ def _nsat_from_kfsat(kfsat: jax.Array) -> jax.Array:
     return 2.0 * kfsat**3 / (3.0 * jnp.pi**2)
 
 
-def _solve_skyrme_system(params: Mapping[str, jax.Array]) -> tuple[jax.Array, jax.Array]:
+def _solve_skyrme_system(
+    params: Mapping[str, jax.Array]
+) -> tuple[jax.Array, jax.Array]:
     """Solve for Skyrme force parameters from INM inputs.
 
     This mirrors :meth:`Skyrme_EOS_model.solve_skyrme_system` but stays pure so it
@@ -88,7 +90,12 @@ def _solve_skyrme_system(params: Mapping[str, jax.Array]) -> tuple[jax.Array, ja
 
     a1 = jnp.array(
         [
-            [3.0 * rhosat / 8.0, 3.0 * rhosat * kf**2 / 80.0, r3 / 16.0, 3.0 * r5 * kf**2 / 80.0],
+            [
+                3.0 * rhosat / 8.0,
+                3.0 * rhosat * kf**2 / 80.0,
+                r3 / 16.0,
+                3.0 * r5 * kf**2 / 80.0,
+            ],
             [
                 9.0 * rhosat / 8.0,
                 3.0 * rhosat * kf**2 / 16.0,
@@ -183,7 +190,9 @@ def _solve_skyrme_system(params: Mapping[str, jax.Array]) -> tuple[jax.Array, ja
     x5_sol = (term_t5_x5 / t5_sol - 5.0) / 4.0
 
     t_final = jnp.array([t0_sol, t1_sol, params["t2"], t3_sol, params["t4"], t5_sol])
-    x_final = jnp.array([params["x0"], params["x1"], x2_sol, x3_sol, params["x4"], x5_sol])
+    x_final = jnp.array(
+        [params["x0"], params["x1"], x2_sol, x3_sol, params["x4"], x5_sol]
+    )
     return t_final, x_final
 
 

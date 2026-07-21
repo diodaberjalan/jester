@@ -31,10 +31,19 @@ likelihoods:
   enabled: true
   trigger_assumption: durca_or_cse
   penalty_value: -1e5
+  # Marginalization over unknown CSE-branch cooling density n*:
+  # n* ~ U[4 nsat, 10 nsat] (defaults shown; configurable).
+  # nstar_min_nsat: 4.0
+  # nstar_max_nsat: 10.0
+  # nb_ncool: 300
+  # nb_nstar: 100
+  # Legacy behavior (m_trig = M(nbreak)) available as:
+  # trigger_assumption: durca_or_cse_simple
 - type: mtrig_lower
   enabled: true
   trigger_assumption: durca_or_cse
   penalty_value: -1e5
+  # Same marginalization options as direct_urca above.
 
 sampler:
   type: smc-rw

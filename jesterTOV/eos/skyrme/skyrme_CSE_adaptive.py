@@ -246,8 +246,11 @@ class Skyrme_with_AdaptiveCSE_EOS_model(Interpolate_EOS_model):
         # 2.  Automatic nbreak from cs² thresholds
         # ----------------------------------------------------------------
         nbreak = self._find_nbreak_from_cs2(
-            n_skyrme_full, cs2_skyrme_full,
-            self.cs2_high_threshold, self.cs2_low_threshold, self.nmax,
+            n_skyrme_full,
+            cs2_skyrme_full,
+            self.cs2_high_threshold,
+            self.cs2_low_threshold,
+            self.nmax,
             n_min=self.nmin_Skyrme_nsat * self.nsat,
             nbreak_min=self.min_nbreak,
         )
@@ -305,7 +308,9 @@ class Skyrme_with_AdaptiveCSE_EOS_model(Interpolate_EOS_model):
         cs2_extension_function = lambda n: jnp.interp(n, ngrids_ext, cs2grids_ext)
 
         n_CSE = jnp.logspace(
-            jnp.log10(nbreak), jnp.log10(self.nmax), num=self.ndat_CSE,
+            jnp.log10(nbreak),
+            jnp.log10(self.nmax),
+            num=self.ndat_CSE,
         )
         cs2_CSE = cs2_extension_function(n_CSE)
 

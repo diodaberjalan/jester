@@ -7,6 +7,7 @@ from jesterTOV import utils
 from jesterTOV.eos.base import Interpolate_EOS_model
 from jesterTOV.tov.data_classes import EOSData
 
+
 class Skyrme_with_peakCSE_EOS_model(Interpolate_EOS_model):
     r"""
     Skyrme EOS with Gaussian peak Constant Speed-of-sound Extensions (peakCSE).
@@ -174,10 +175,7 @@ class Skyrme_with_peakCSE_EOS_model(Interpolate_EOS_model):
             params["gaussian_peak"]
             * jnp.exp(
                 -0.5
-                * (
-                    (x - params["gaussian_mu"]) ** 2
-                    / params["gaussian_sigma"] ** 2
-                )
+                * ((x - params["gaussian_mu"]) ** 2 / params["gaussian_sigma"] ** 2)
             )
             + offset
             + (
@@ -185,23 +183,18 @@ class Skyrme_with_peakCSE_EOS_model(Interpolate_EOS_model):
                 / (
                     1.0
                     + jnp.exp(
-                        -params["logit_growth_rate"]
-                        * (x - params["logit_midpoint"])
+                        -params["logit_growth_rate"] * (x - params["logit_midpoint"])
                     )
                 )
             )
         )
 
         # Compute n, p, e for peakCSE (number densities in unit of fm^-3)
-        n_CSE = jnp.logspace(
-            jnp.log10(nbreak), jnp.log10(self.nmax), num=self.ndat_CSE
-        )
+        n_CSE = jnp.logspace(jnp.log10(nbreak), jnp.log10(self.nmax), num=self.ndat_CSE)
         cs2_CSE = cs2_extension_function(n_CSE)
 
         # We add a very small number to avoid problems with duplicates below
-        mu_CSE = (
-            mu_break * jnp.exp(utils.cumtrapz(cs2_CSE / n_CSE, n_CSE)) + 1e-6
-        )
+        mu_CSE = mu_break * jnp.exp(utils.cumtrapz(cs2_CSE / n_CSE, n_CSE)) + 1e-6
         p_CSE = p_break + utils.cumtrapz(cs2_CSE * mu_CSE, n_CSE) + 1e-6
         e_CSE = e_break + utils.cumtrapz(mu_CSE, n_CSE) + 1e-6
 

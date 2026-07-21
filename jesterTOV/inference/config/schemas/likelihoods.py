@@ -880,19 +880,32 @@ class DirectUrcaLikelihoodConfig(BaseLikelihoodConfig):
           enabled: true
           trigger_assumption: "durca_or_cse"
           penalty_value: -1e5
+
+    .. code-block:: yaml
+
+        - type: "direct_urca"
+          enabled: true
+          trigger_assumption: "durca_or_cse_simple"
+          penalty_value: -1e5
     """
 
     type: Literal["direct_urca"] = Field(
         default="direct_urca", description="Likelihood type identifier"
     )
 
-    trigger_assumption: Literal["durca_only", "durca_or_cse"] = Field(
-        default="durca_only",
-        description=(
-            "How to define m_trig. 'durca_only': require n_durca below n_TOV "
-            "and, when nbreak exists, below nbreak. 'durca_or_cse': use "
-            "n_durca or nbreak, whichever triggers first below n_TOV."
-        ),
+    trigger_assumption: Literal["durca_only", "durca_or_cse", "durca_or_cse_simple"] = (
+        Field(
+            default="durca_only",
+            description=(
+                "How to define m_trig. 'durca_only': require n_durca below n_TOV "
+                "and, when nbreak exists, below nbreak. 'durca_or_cse': use "
+                "n_durca directly when n_durca <= nbreak, otherwise marginalize "
+                "over unknown cooling density n_cool in the CSE branch with a "
+                "uniform n* prior. 'durca_or_cse_simple' (legacy): use "
+                "min(n_durca, nbreak) as trigger, assuming CSE always allows "
+                "direct Urca."
+            ),
+        )
     )
 
     name: str = Field(
@@ -941,6 +954,44 @@ class DirectUrcaLikelihoodConfig(BaseLikelihoodConfig):
         ),
     )
 
+    nstar_min_nsat: float = Field(
+        default=4.0,
+        gt=0.0,
+        description=(
+            "Minimum stellar central density n* for the marginalization prior, "
+            "in units of n_sat = 0.16 fm⁻³.  Only used when "
+            "trigger_assumption = 'durca_or_cse' (default: 4.0)."
+        ),
+    )
+
+    nstar_max_nsat: float = Field(
+        default=10.0,
+        gt=0.0,
+        description=(
+            "Maximum stellar central density n* for the marginalization prior, "
+            "in units of n_sat = 0.16 fm⁻³.  Only used when "
+            "trigger_assumption = 'durca_or_cse' (default: 10.0)."
+        ),
+    )
+
+    nb_ncool: int = Field(
+        default=300,
+        gt=0,
+        description=(
+            "Number of grid points for the n_cool (cooling density) dimension "
+            "in the 2D trapezoidal marginalization (default: 300)."
+        ),
+    )
+
+    nb_nstar: int = Field(
+        default=100,
+        gt=0,
+        description=(
+            "Number of grid points for the n* (stellar central density) "
+            "dimension in the 2D trapezoidal marginalization (default: 100)."
+        ),
+    )
+
 
 class MtrigLowerLikelihoodConfig(BaseLikelihoodConfig):
     r"""Trigger-mass lower-bound likelihood configuration.
@@ -963,14 +1014,17 @@ class MtrigLowerLikelihoodConfig(BaseLikelihoodConfig):
         default="mtrig_lower", description="Likelihood type identifier"
     )
 
-    trigger_assumption: Literal["durca_only", "durca_or_cse"] = Field(
-        default="durca_only",
-        description=(
-            "How to define m_trig before applying the lower-bound likelihood. "
-            "'durca_only': require n_durca below n_TOV and, when nbreak exists, "
-            "below nbreak. 'durca_or_cse': use n_durca or nbreak, whichever "
-            "triggers first below n_TOV."
-        ),
+    trigger_assumption: Literal["durca_only", "durca_or_cse", "durca_or_cse_simple"] = (
+        Field(
+            default="durca_only",
+            description=(
+                "How to define m_trig before applying the lower-bound likelihood. "
+                "'durca_only': require n_durca below n_TOV and, when nbreak exists, "
+                "below nbreak. 'durca_or_cse': use n_durca directly when n_durca <= "
+                "nbreak, otherwise marginalize over unknown cooling density in the "
+                "CSE branch. 'durca_or_cse_simple' (legacy): use min(n_durca, nbreak)."
+            ),
+        )
     )
 
     name: str = Field(
@@ -983,6 +1037,44 @@ class MtrigLowerLikelihoodConfig(BaseLikelihoodConfig):
         description=(
             "Log-likelihood penalty returned when no valid trigger exists below "
             "M_TOV or required direct-Urca quantities are missing (default: -1e5)."
+        ),
+    )
+
+    nstar_min_nsat: float = Field(
+        default=4.0,
+        gt=0.0,
+        description=(
+            "Minimum stellar central density n* for the marginalization prior, "
+            "in units of n_sat = 0.16 fm⁻³.  Only used when "
+            "trigger_assumption = 'durca_or_cse' (default: 4.0)."
+        ),
+    )
+
+    nstar_max_nsat: float = Field(
+        default=10.0,
+        gt=0.0,
+        description=(
+            "Maximum stellar central density n* for the marginalization prior, "
+            "in units of n_sat = 0.16 fm⁻³.  Only used when "
+            "trigger_assumption = 'durca_or_cse' (default: 10.0)."
+        ),
+    )
+
+    nb_ncool: int = Field(
+        default=300,
+        gt=0,
+        description=(
+            "Number of grid points for the n_cool (cooling density) dimension "
+            "in the 2D trapezoidal marginalization (default: 300)."
+        ),
+    )
+
+    nb_nstar: int = Field(
+        default=100,
+        gt=0,
+        description=(
+            "Number of grid points for the n* (stellar central density) "
+            "dimension in the 2D trapezoidal marginalization (default: 100)."
         ),
     )
 

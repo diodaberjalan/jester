@@ -364,13 +364,30 @@ class InferenceResult:
         # Also exclude any transform-derived EOS quantities that may already be in posterior
         # from a prior call to add_eos_from_transform.
         eos_derived_starting = {  # known transform output keys
-            "masses_EOS", "radii_EOS", "Lambdas_EOS",
-            "logpc_EOS", "n", "p", "e", "h", "cs2", "dloge_dlogp", "n_TOV",
-            "n_tov_failures", "n_causality_violations",
-            "n_stability_violations", "n_pressure_violations",
-            "n_esym_violations", "n_orig", "n_gamma_violations",
-            "proton_fraction", "e_fraction", "muon_fraction",
-            "durca_density.ye", "durca_density.ym", "durca_density.nb_durca",
+            "masses_EOS",
+            "radii_EOS",
+            "Lambdas_EOS",
+            "logpc_EOS",
+            "n",
+            "p",
+            "e",
+            "h",
+            "cs2",
+            "dloge_dlogp",
+            "n_TOV",
+            "n_tov_failures",
+            "n_causality_violations",
+            "n_stability_violations",
+            "n_pressure_violations",
+            "n_esym_violations",
+            "n_orig",
+            "n_gamma_violations",
+            "proton_fraction",
+            "e_fraction",
+            "muon_fraction",
+            "durca_density.ye",
+            "durca_density.ym",
+            "durca_density.nb_durca",
         }
         exclude_keys = {
             "log_prob",
@@ -430,9 +447,7 @@ class InferenceResult:
         # captures extra_constraints (proton_fraction, e_fraction, muon_fraction, durca_density_*),
         # constraint violation counts, and any future EOS diagnostics without a hardcoded whitelist.
         eos_only = {
-            k: v
-            for k, v in transformed_samples.items()
-            if k not in param_samples
+            k: v for k, v in transformed_samples.items() if k not in param_samples
         }
         self.add_derived_eos(eos_only)
 

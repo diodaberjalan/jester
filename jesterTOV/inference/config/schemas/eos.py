@@ -146,9 +146,7 @@ class MetamodelAdaptiveCSEEOSConfig(BaseMetamodelEOSConfig):
     @classmethod
     def _validate_nb_cse(cls, v: int) -> int:
         if v <= 0:
-            raise ValueError(
-                "nb_CSE must be > 0 for type='metamodel_adaptive_cse'."
-            )
+            raise ValueError("nb_CSE must be > 0 for type='metamodel_adaptive_cse'.")
         return v
 
 
@@ -304,9 +302,7 @@ class SkyrmeAdaptiveCSEEOSConfig(BaseSkyrmeEOSConfig):
     @classmethod
     def _validate_nb_cse(cls, v: int) -> int:
         if v <= 0:
-            raise ValueError(
-                "nb_CSE must be > 0 for type='skyrme_adaptive_cse'."
-            )
+            raise ValueError("nb_CSE must be > 0 for type='skyrme_adaptive_cse'.")
         return v
 
 

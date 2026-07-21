@@ -114,11 +114,11 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
             self.proton_fraction = lambda x, y: self.proton_fraction_val
             self.with_muon = False
             logger.info(f"Proton fraction fixed to {self.proton_fraction_val}")
-        elif proton_fraction == 'approx':
+        elif proton_fraction == "approx":
             # Approximate beta-equilibrium without muons (legacy behavior)
             self.proton_fraction = lambda x, y: self.compute_proton_fraction(x, y)
             self.with_muon = False
-        elif proton_fraction == 'exact' or proton_fraction is None:
+        elif proton_fraction == "exact" or proton_fraction is None:
             # Exact beta-equilibrium with muons (default behavior)
             self.proton_fraction = lambda x, y: self.compute_proton_fraction_exact(y)
             self.with_muon = True
@@ -185,33 +185,33 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
         # Constants
         pi = jnp.pi
         hbm = 20.73553000
-        hmt = 2 / (1/hbm + 1/hbm)
+        hmt = 2 / (1 / hbm + 1 / hbm)
 
         # Derived densities
-        kf = p['kfsat']
+        kf = p["kfsat"]
         rhosat = 2 * kf**3 / (3 * pi**2)
         rhoHD = 1.0
-        kfnHD = (3 * pi**2)**(1/3)
+        kfnHD = (3 * pi**2) ** (1 / 3)
 
         # Density dependent powers
-        r3 = rhosat**(p['alph'] + 1)
-        r4 = rhosat**(p['beta'] + 1)
-        r5 = rhosat**(p['gamma'] + 1)
+        r3 = rhosat ** (p["alph"] + 1)
+        r4 = rhosat ** (p["beta"] + 1)
+        r5 = rhosat ** (p["gamma"] + 1)
 
-        rHD3 = rhoHD**(p['alph'] + 1)
-        rHD4 = rhoHD**(p['beta'] + 1)
-        rHD5 = rhoHD**(p['gamma'] + 1)
+        rHD3 = rhoHD ** (p["alph"] + 1)
+        rHD4 = rhoHD ** (p["beta"] + 1)
+        rHD5 = rhoHD ** (p["gamma"] + 1)
 
         # --- System 1: Isoscalar Channel (4x4) ---
         a1_00 = 3 * rhosat / 8
         a1_01 = 3 * rhosat * kf**2 / 80
         a1_02 = r3 / 16
-        a1_03 = 3/80 * r5 * kf**2
+        a1_03 = 3 / 80 * r5 * kf**2
 
         a1_10 = 9 * rhosat / 8
         a1_11 = 5 * a1_01
-        a1_12 = 3 * (p['alph'] + 1) * r3 / 16
-        a1_13 = 3/80 * kf**2 * r5 * (5 + 3*p['gamma'])
+        a1_12 = 3 * (p["alph"] + 1) * r3 / 16
+        a1_13 = 3 / 80 * kf**2 * r5 * (5 + 3 * p["gamma"])
 
         a1_20 = 0.0
         a1_21 = rhosat / (hmt * 16)
@@ -219,71 +219,96 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
         a1_23 = (r5 / 16) / hmt
 
         a1_30 = 9 * rhosat / 4
-        a1_31 = 3/4 * rhosat * kf**2
-        a1_32 = 3/16 * (p['alph'] + 1) * (3*p['alph'] + 2) * r3
-        a1_33 = 3/80 * (3*p['gamma'] + 5) * (3*p['gamma'] + 4) * r5 * kf**2
+        a1_31 = 3 / 4 * rhosat * kf**2
+        a1_32 = 3 / 16 * (p["alph"] + 1) * (3 * p["alph"] + 2) * r3
+        a1_33 = 3 / 80 * (3 * p["gamma"] + 5) * (3 * p["gamma"] + 4) * r5 * kf**2
 
-        A1 = jnp.array([
-            [a1_00, a1_01, a1_02, a1_03],
-            [a1_10, a1_11, a1_12, a1_13],
-            [a1_20, a1_21, a1_22, a1_23],
-            [a1_30, a1_31, a1_32, a1_33]
-        ])
+        A1 = jnp.array(
+            [
+                [a1_00, a1_01, a1_02, a1_03],
+                [a1_10, a1_11, a1_12, a1_13],
+                [a1_20, a1_21, a1_22, a1_23],
+                [a1_30, a1_31, a1_32, a1_33],
+            ]
+        )
 
-        b1_0 = p['av'] - hmt * 0.6 * kf**2 - (9 * p['t4'] * kf**2 * r4 / 80)
-        b1_1 = -hmt * 1.2 * kf**2 - 3 * (3 * p['t4'] * kf**2 * r4 / 80 * (5 + 3*p['beta']))
-        b1_2 = 1/p['meffs'] - 1 - (3 * p['t4'] * r4 / 16) / hmt
-        b1_3 = p['Kinf'] - 6/5 * hmt * kf**2 - 9/80 * p['t4'] * kf**2 * r4 * (3*p['beta'] + 5) * (3*p['beta'] + 4)
+        b1_0 = p["av"] - hmt * 0.6 * kf**2 - (9 * p["t4"] * kf**2 * r4 / 80)
+        b1_1 = -hmt * 1.2 * kf**2 - 3 * (
+            3 * p["t4"] * kf**2 * r4 / 80 * (5 + 3 * p["beta"])
+        )
+        b1_2 = 1 / p["meffs"] - 1 - (3 * p["t4"] * r4 / 16) / hmt
+        b1_3 = (
+            p["Kinf"]
+            - 6 / 5 * hmt * kf**2
+            - 9 / 80 * p["t4"] * kf**2 * r4 * (3 * p["beta"] + 5) * (3 * p["beta"] + 4)
+        )
         b1 = jnp.array([b1_0, b1_1, b1_2, b1_3])
 
         res1 = jax.scipy.linalg.solve(A1, b1)
         t0_sol, term_t1_x2, t3_sol, term_t5_x5 = res1[0], res1[1], res1[2], res1[3]
 
         # --- System 2: Isovector Channel (3x3) ---
-        a2_00 = -(p['x1'] + 5/4) * rhosat * kf**2 / 8
+        a2_00 = -(p["x1"] + 5 / 4) * rhosat * kf**2 / 8
         a2_01 = -t3_sol * r3 / 24
-        a2_02 = -9/4 * kf**2 * r5 / 24
+        a2_02 = -9 / 4 * kf**2 * r5 / 24
 
-        a2_10 = rhosat * (5/4 + p['x1']) / 8 / hmt
+        a2_10 = rhosat * (5 / 4 + p["x1"]) / 8 / hmt
         a2_11 = 0.0
-        a2_12 = 3/4 * r5 / 8 / hmt
+        a2_12 = 3 / 4 * r5 / 8 / hmt
 
-        a2_20 = -3 * (5/4 + p['x1']) * rhoHD * kfnHD**2 / 40
+        a2_20 = -3 * (5 / 4 + p["x1"]) * rhoHD * kfnHD**2 / 40
         a2_21 = -t3_sol * rHD3 / 24
         a2_22 = -9 * rHD5 * kfnHD**2 / 40 / 4
 
-        A2 = jnp.array([
-            [a2_00, a2_01, a2_02],
-            [a2_10, a2_11, a2_12],
-            [a2_20, a2_21, a2_22]
-        ])
+        A2 = jnp.array(
+            [[a2_00, a2_01, a2_02], [a2_10, a2_11, a2_12], [a2_20, a2_21, a2_22]]
+        )
 
-        b2_0 = p['J'] - hmt * kf**2 / 3 \
-               + t0_sol * rhosat * (2 * p['x0'] + 1) / 8 \
-               + p['t4'] / 8 * kf**2 * r4 * p['x4'] \
-               - 1.25 * term_t5_x5 * r5 * kf**2 / 24 \
-               - 0.25 * (5 * term_t1_x2 - 9 * p['t2']) * rhosat * kf**2 / 24 \
-               + t3_sol * r3 / 48
+        b2_0 = (
+            p["J"]
+            - hmt * kf**2 / 3
+            + t0_sol * rhosat * (2 * p["x0"] + 1) / 8
+            + p["t4"] / 8 * kf**2 * r4 * p["x4"]
+            - 1.25 * term_t5_x5 * r5 * kf**2 / 24
+            - 0.25 * (5 * term_t1_x2 - 9 * p["t2"]) * rhosat * kf**2 / 24
+            + t3_sol * r3 / 48
+        )
 
-        b2_1 = 1/p['meffv'] - 1 - (term_t5_x5 * r5 / 4 \
-               + p['t4'] * (2 + p['x4']) * r4 \
-               + rhosat * (3 * p['t2'] + term_t1_x2) / 4) / hmt / 8
+        b2_1 = (
+            1 / p["meffv"]
+            - 1
+            - (
+                term_t5_x5 * r5 / 4
+                + p["t4"] * (2 + p["x4"]) * r4
+                + rhosat * (3 * p["t2"] + term_t1_x2) / 4
+            )
+            / hmt
+            / 8
+        )
 
-        b2_2 = p['eNMhd'] - 0.6 * hmt * kfnHD**2 \
-               - 3 * p['t4'] * (1 - p['x4']) * rHD4 * kfnHD**2 / 40 \
-               - 0.25 * t0_sol * (1 - p['x0']) * rhoHD - t3_sol * rHD3 / 24 \
-               - 9/40 * kfnHD**2 / 4 * (term_t5_x5 * rHD5 + rhoHD * (term_t1_x2 - p['t2']))
+        b2_2 = (
+            p["eNMhd"]
+            - 0.6 * hmt * kfnHD**2
+            - 3 * p["t4"] * (1 - p["x4"]) * rHD4 * kfnHD**2 / 40
+            - 0.25 * t0_sol * (1 - p["x0"]) * rhoHD
+            - t3_sol * rHD3 / 24
+            - 9
+            / 40
+            * kfnHD**2
+            / 4
+            * (term_t5_x5 * rHD5 + rhoHD * (term_t1_x2 - p["t2"]))
+        )
         b2 = jnp.array([b2_0, b2_1, b2_2])
 
         res2 = jax.scipy.linalg.solve(A2, b2)
         t1_sol, x3_sol, t5_sol = res2[0], res2[1], res2[2]
 
         # --- Recover x2 and x5 ---
-        x2_sol = (term_t1_x2 / p['t2'] - 3 * t1_sol / p['t2'] - 5) / 4
+        x2_sol = (term_t1_x2 / p["t2"] - 3 * t1_sol / p["t2"] - 5) / 4
         x5_sol = (term_t5_x5 / t5_sol - 5) / 4
 
-        t_final = jnp.array([t0_sol, t1_sol, p['t2'], t3_sol, p['t4'], t5_sol])
-        x_final = jnp.array([p['x0'], p['x1'], x2_sol, x3_sol, p['x4'], x5_sol])
+        t_final = jnp.array([t0_sol, t1_sol, p["t2"], t3_sol, p["t4"], t5_sol])
+        x_final = jnp.array([p["x0"], p["x1"], x2_sol, x3_sol, p["x4"], x5_sol])
 
         return t_final, x_final
 
@@ -314,9 +339,9 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
         ro = ron + rop
 
         # Kinetic energy density
-        tau_factor = 0.6 * (3 * jnp.pi**2)**(2/3)
-        taun = tau_factor * ron**(5/3)
-        taup = tau_factor * rop**(5/3)
+        tau_factor = 0.6 * (3 * jnp.pi**2) ** (2 / 3)
+        taun = tau_factor * ron ** (5 / 3)
+        taup = tau_factor * rop ** (5 / 3)
 
         # Kinetic energy term
         Ekin = (0.5 * utils.hbarc**2) * (taun / utils.m_n + taup / utils.m_p)
@@ -350,9 +375,7 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
 
         return Ekin + E0 + E3 + Eeff + E4 + E5
 
-    def compute_proton_fraction_exact(
-        self, n: Array
-    ) -> tuple:
+    def compute_proton_fraction_exact(self, n: Array) -> tuple:
         r"""
         Compute proton fraction from exact beta-equilibrium with muons.
 
@@ -368,17 +391,17 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
         yp_approx = self.compute_proton_fraction(None, n)
 
         def muElec(ne):
-            ne_safe = ne #jnp.clip(ne, 1e-25, None)
-            kfe = jnp.power(3*jnp.pi*jnp.pi*ne_safe, 1.0/3.0)
+            ne_safe = ne  # jnp.clip(ne, 1e-25, None)
+            kfe = jnp.power(3 * jnp.pi * jnp.pi * ne_safe, 1.0 / 3.0)
             xe = utils.hbarc * kfe / utils.m_e
-            mue = utils.m_e * jnp.sqrt(1 + xe*xe)
+            mue = utils.m_e * jnp.sqrt(1 + xe * xe)
             return mue
 
         def muMuon(nm):
             nmu_safe = jnp.clip(nm, 1e-12, None)
-            kf = (3*jnp.pi*jnp.pi*nmu_safe)**(1/3)
+            kf = (3 * jnp.pi * jnp.pi * nmu_safe) ** (1 / 3)
             xm = utils.hbarc * kf / utils.m_mu
-            mu = utils.m_mu * jnp.sqrt(1 + xm*xm)
+            mu = utils.m_mu * jnp.sqrt(1 + xm * xm)
             return mu
 
         def guess_val_p(nb):
@@ -393,37 +416,43 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
         def betaHMnpe_optimistix(nb):
             def fn(z, args=nb):
                 y = z
-                n_n = nb*(1-y)
-                n_p = nb*y
+                n_n = nb * (1 - y)
+                n_p = nb * y
                 mue = muElec(nb * y)
                 mun = nu_n(n_n, n_p) + utils.m_n
                 mup = nu_p(n_n, n_p) + utils.m_p
-                f = (mun - mup - mue)/mun
+                f = (mun - mup - mue) / mun
                 return f
+
             z0 = jnp.array(guess_val_p(nb))
 
             # Use Newton with Dogleg fallback for robustness and speed
-            sol = optx.root_find(fn, optx.Newton(rtol=1e-5, atol=1e-6), z0, throw=False, max_steps=1000)
+            sol = optx.root_find(
+                fn, optx.Newton(rtol=1e-5, atol=1e-6), z0, throw=False, max_steps=1000
+            )
             return sol.value
 
         def betaHMnpemu_optimistix(nb, ye_guess):
             def fn(z, args):
                 y1, y2 = z
                 y = y1 + y2
-                n_n = nb*(1-y)
-                n_p = nb*y
+                n_n = nb * (1 - y)
+                n_p = nb * y
                 mun = nu_n(n_n, n_p) + utils.m_n
                 mup = nu_p(n_n, n_p) + utils.m_p
                 mue = muElec(nb * y1)
                 mumu = muMuon(nb * y2)
-                f1 = (mun - mup - mue)/mun
-                f2 = (mumu - mue)/mue
+                f1 = (mun - mup - mue) / mun
+                f2 = (mumu - mue) / mue
                 return f1, f2
+
             # Use the no-muon solution as the electron fraction initial guess
             # (much better than the approximate guess when S(n) < 0 at high density)
             z0 = jnp.array([ye_guess, 1.0e-9])
             # Use Newton with Dogleg fallback for robustness and speed
-            sol = optx.root_find(fn, optx.Newton(rtol=1e-5, atol=1e-6), z0, throw=False, max_steps=1000)
+            sol = optx.root_find(
+                fn, optx.Newton(rtol=1e-5, atol=1e-6), z0, throw=False, max_steps=1000
+            )
             return sol.value
 
         @jax.jit
@@ -436,9 +465,10 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
                 result = jax.lax.cond(
                     has_muon,
                     lambda: betaHMnpemu_optimistix(nb, ye),
-                    lambda: jnp.array([ye, 0.0])
+                    lambda: jnp.array([ye, 0.0]),
                 )
                 return result
+
             return jax.vmap(compute_for_single)(nb_full, cond_mask, ye_arr)
 
         ye_arr = calc_ye_all_jit(n)
@@ -497,8 +527,8 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
         #   S(n) = [e(n, δ=1) - e(n, δ=0)] / n
         #   δ=1 → pure neutron matter (ron=n, rop=0)
         #   δ=0 → symmetric matter   (ron=n/2, rop=n/2)
-        e_pnm = self.eDenSky(n, 0.0)          # pure neutron matter
-        e_snm = self.eDenSky(n / 2, n / 2)     # symmetric matter
+        e_pnm = self.eDenSky(n, 0.0)  # pure neutron matter
+        e_snm = self.eDenSky(n / 2, n / 2)  # symmetric matter
         S_n = (e_pnm - e_snm) / n
 
         # Coefficients of the cubic a y^3 + b y^2 + c y + d = 0
@@ -570,7 +600,7 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
 
         # Handle calculate_durca: use instance default if not provided
         if calculate_durca is None:
-            calculate_durca = getattr(self, 'calculate_durca', False)
+            calculate_durca = getattr(self, "calculate_durca", False)
         self.calculate_durca = calculate_durca
         self.durca_density = {"ye": jnp.nan, "ym": jnp.nan, "nb_durca": jnp.nan}
 
@@ -578,9 +608,9 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
         self.t_skyrme, self.x_skyrme = self.solve_skyrme_system(params)
 
         # Store density dependence parameters
-        self.alph = params.get('alph', 0.2)
-        self.beta = params.get('beta', 0.0833)
-        self.gamma = params.get('gamma', 0.25)
+        self.alph = params.get("alph", 0.2)
+        self.beta = params.get("beta", 0.0833)
+        self.gamma = params.get("gamma", 0.25)
         self.t2p = 1.0  # Standard value
 
         # Compute proton fraction
@@ -608,7 +638,9 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
             n_p = n * yp
             e = self.eDenSky(n_n, n_p)
             # dE/dn at fixed Y_p
-            de_dn = jax.grad(lambda n_val: self.eDenSky(n_val * (1 - yp), n_val * yp))(n)
+            de_dn = jax.grad(lambda n_val: self.eDenSky(n_val * (1 - yp), n_val * yp))(
+                n
+            )
             p = n * de_dn - e
             return p
 
@@ -617,24 +649,30 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
         # Add lepton contributions to pressure
         if self.with_muon and e_fraction is not None:
             # Ensure lepton fractions are non-negative to avoid NaNs in powers
-            e_fraction_safe = e_fraction #jnp.clip(e_fraction, 1e-25, None)
-            muon_fraction_arr = muon_fraction # jnp.clip(proton_fraction - e_fraction, 1e-25, None)
+            e_fraction_safe = e_fraction  # jnp.clip(e_fraction, 1e-25, None)
+            muon_fraction_arr = (
+                muon_fraction  # jnp.clip(proton_fraction - e_fraction, 1e-25, None)
+            )
 
             # Electron pressure
-            K_Fe = (3.0 * jnp.pi**2 * self.n_Skyrme * e_fraction_safe) ** (1.0/3.0) * utils.hbarc
+            K_Fe = (3.0 * jnp.pi**2 * self.n_Skyrme * e_fraction_safe) ** (
+                1.0 / 3.0
+            ) * utils.hbarc
             C_e = utils.m_e**4 / (8.0 * jnp.pi**2) / utils.hbarc**3
             x_e = K_Fe / utils.m_e
             f_e = x_e * (1 + 2 * x_e**2) * jnp.sqrt(1 + x_e**2) - jnp.arcsinh(x_e)
             e_electron = C_e * f_e
-            p_electron = -e_electron + 8.0/3.0 * C_e * x_e**3 * jnp.sqrt(1 + x_e**2)
+            p_electron = -e_electron + 8.0 / 3.0 * C_e * x_e**3 * jnp.sqrt(1 + x_e**2)
 
             # Muon pressure
-            K_Fmu = (3.0 * jnp.pi**2 * self.n_Skyrme * muon_fraction_arr) ** (1.0/3.0) * utils.hbarc
+            K_Fmu = (3.0 * jnp.pi**2 * self.n_Skyrme * muon_fraction_arr) ** (
+                1.0 / 3.0
+            ) * utils.hbarc
             C_mu = utils.m_mu**4 / (8.0 * jnp.pi**2) / utils.hbarc**3
             x_mu = K_Fmu / utils.m_mu
             f_mu = x_mu * (1 + 2 * x_mu**2) * jnp.sqrt(1 + x_mu**2) - jnp.arcsinh(x_mu)
             e_muon = C_mu * f_mu
-            p_muon = -e_muon + 8.0/3.0 * C_mu * x_mu**3 * jnp.sqrt(1 + x_mu**2)
+            p_muon = -e_muon + 8.0 / 3.0 * C_mu * x_mu**3 * jnp.sqrt(1 + x_mu**2)
 
             p_lepton = p_electron + p_muon
             e_lepton = e_electron + e_muon
@@ -681,9 +719,7 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
 
         # Concatenate the arrays
         n = jnp.concatenate([self.ns_crust, self.n_connection, self.n_Skyrme])
-        cs2 = jnp.concatenate(
-            [jnp.array(self.cs2_crust), cs2_connection, cs2_Skyrme]
-        )
+        cs2 = jnp.concatenate([jnp.array(self.cs2_crust), cs2_connection, cs2_Skyrme])
 
         # Compute pressure and energy from chemical potential
         log_mu = utils.cumtrapz(cs2, jnp.log(n)) + jnp.log(self.mu_lowest)
@@ -797,20 +833,20 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
             muon_fraction = jnp.maximum(1e-25, proton_fraction - e_fraction)
 
             # Electron contribution
-            K_Fe = (3.0 * jnp.pi**2 * n * e_fraction) ** (1.0/3.0) * utils.hbarc
+            K_Fe = (3.0 * jnp.pi**2 * n * e_fraction) ** (1.0 / 3.0) * utils.hbarc
             C_e = utils.m_e**4 / (8.0 * jnp.pi**2) / utils.hbarc**3
             x_e = K_Fe / utils.m_e
             f_e = x_e * (1 + 2 * x_e**2) * jnp.sqrt(1 + x_e**2) - jnp.arcsinh(x_e)
             e_electron = C_e * f_e
-            p_electron = -e_electron + 8.0/3.0 * C_e * x_e**3 * jnp.sqrt(1 + x_e**2)
+            p_electron = -e_electron + 8.0 / 3.0 * C_e * x_e**3 * jnp.sqrt(1 + x_e**2)
 
             # Muon contribution
-            K_Fmu = (3.0 * jnp.pi**2 * n * muon_fraction) ** (1.0/3.0) * utils.hbarc
+            K_Fmu = (3.0 * jnp.pi**2 * n * muon_fraction) ** (1.0 / 3.0) * utils.hbarc
             C_mu = utils.m_mu**4 / (8.0 * jnp.pi**2) / utils.hbarc**3
             x_mu = K_Fmu / utils.m_mu
             f_mu = x_mu * (1 + 2 * x_mu**2) * jnp.sqrt(1 + x_mu**2) - jnp.arcsinh(x_mu)
             e_muon = C_mu * f_mu
-            p_muon = -e_muon + 8.0/3.0 * C_mu * x_mu**3 * jnp.sqrt(1 + x_mu**2)
+            p_muon = -e_muon + 8.0 / 3.0 * C_mu * x_mu**3 * jnp.sqrt(1 + x_mu**2)
 
             e_lepton = e_electron + e_muon
             p_lepton = p_electron + p_muon
@@ -822,7 +858,8 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
             dp_2nd_total = jnp.gradient(p_total, dn)
             dp_4th_total = jnp.empty_like(p_total)
             dp_4th_total = dp_4th_total.at[2:-2].set(
-                (p_total[:-4] - 8 * p_total[1:-3] + 8 * p_total[3:-1] - p_total[4:]) / (12.0 * dn)
+                (p_total[:-4] - 8 * p_total[1:-3] + 8 * p_total[3:-1] - p_total[4:])
+                / (12.0 * dn)
             )
             dp_4th_total = dp_4th_total.at[:2].set(dp_2nd_total[:2])
             dp_4th_total = dp_4th_total.at[-2:].set(dp_2nd_total[-2:])

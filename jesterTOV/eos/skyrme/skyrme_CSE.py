@@ -171,10 +171,14 @@ class Skyrme_with_CSE_EOS_model(Interpolate_EOS_model):
                     # Convert normalized position to actual density
                     n_density = nbreak + n_u * (self.nmax - nbreak)
                     ngrids = jnp.append(ngrids, jnp.array([n_density]))
-                    cs2grids = jnp.append(cs2grids, jnp.array([params.get(f"cs2_CSE_{i}", 0.5)]))
+                    cs2grids = jnp.append(
+                        cs2grids, jnp.array([params.get(f"cs2_CSE_{i}", 0.5)])
+                    )
                 # Add final cs2 at nmax
                 ngrids = jnp.append(ngrids, jnp.array([self.nmax]))
-                cs2grids = jnp.append(cs2grids, jnp.array([params.get(f"cs2_CSE_{self.nb_CSE}", 0.5)]))
+                cs2grids = jnp.append(
+                    cs2grids, jnp.array([params.get(f"cs2_CSE_{self.nb_CSE}", 0.5)])
+                )
 
         # We need to create a fresh instance when return_extra=True since the
         # pre-instantiated skyrme in __init__ doesn't support this parameter
@@ -209,7 +213,7 @@ class Skyrme_with_CSE_EOS_model(Interpolate_EOS_model):
             cs2_skyrme_full,
             extra,
         ) = skyrme_output
-        
+
         # Convert units back for interpolation
         n_skyrme_full = n_skyrme_full / utils.fm_inv3_to_geometric
         p_skyrme_full = p_skyrme_full / utils.MeV_fm_inv3_to_geometric
@@ -237,9 +241,7 @@ class Skyrme_with_CSE_EOS_model(Interpolate_EOS_model):
         cs2_extension_function = lambda n: jnp.interp(n, ngrids_ext, cs2grids_ext)
 
         # Compute n, p, e for CSE (number densities in unit of fm^-3)
-        n_CSE = jnp.logspace(
-            jnp.log10(nbreak), jnp.log10(self.nmax), num=self.ndat_CSE
-        )
+        n_CSE = jnp.logspace(jnp.log10(nbreak), jnp.log10(self.nmax), num=self.ndat_CSE)
         cs2_CSE = cs2_extension_function(n_CSE)
 
         # We add a very small number to avoid problems with duplicates below

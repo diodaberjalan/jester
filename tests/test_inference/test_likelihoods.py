@@ -21,7 +21,10 @@ from jesterTOV.inference.likelihoods.constraints import (
     check_gamma_bounds,
 )
 from jesterTOV.inference.likelihoods.chieft import ChiEFTLikelihood
-from jesterTOV.inference.likelihoods.radio import RadioTimingLikelihood, MaxMassBoundsLikelihood
+from jesterTOV.inference.likelihoods.radio import (
+    RadioTimingLikelihood,
+    MaxMassBoundsLikelihood,
+)
 from jesterTOV.inference.likelihoods.direct_urca import (
     DirectUrcaLikelihood,
     MtrigLowerLikelihood,
@@ -1478,3 +1481,136 @@ class TestDirectUrcaTriggerMassLikelihood:
         assert isinstance(likelihood, MtrigLowerLikelihood)
         assert likelihood.trigger_assumption == "durca_only"
         assert likelihood.penalty_value == -321.0
+
+    # -----------------------------------------------------------------
+    # New tests for n* marginalization (durca_or_cse)
+    # -----------------------------------------------------------------
+
+    def test_durca_or_cse_marginalizes_when_n_durca_gt_nbreak(self):
+        """When n_durca > nbreak, durca_or_cse uses 2D marginalization."""
+        likelihood = DirectUrcaLikelihood(
+            trigger_assumption="durca_or_cse", penalty_value=-1e5
+        )
+        # n_durca ≈ 0.30 (proton fraction reaches XDU at third point)
+        # nbreak = 0.25 → n_durca(0.30) > nbreak(0.25) → marginalize
+        params = self._mock_params(nbreak=0.25)
+        # Lower proton fraction so DU triggers later (> 0.25)
+        params["proton_fraction"] = jnp.array([0.02, 0.05, 0.07, 0.10, 0.14])
+
+        result = likelihood.evaluate(params)
+
+        assert jnp.isfinite(result)
+        # Should not be the penalty — marginalization gives finite result
+        assert result > -1e5
+
+    def test_durca_or_cse_marginalization_returns_finite_for_mtrig_lower(self):
+        """Lower-bound likelihood also marginalizes when n_durca > nbreak."""
+        likelihood = MtrigLowerLikelihood(
+            trigger_assumption="durca_or_cse", penalty_value=-1e5
+        )
+        params = self._mock_params(nbreak=0.25)
+        params["proton_fraction"] = jnp.array([0.02, 0.05, 0.07, 0.10, 0.14])
+
+        result = likelihood.evaluate(params)
+
+        assert jnp.isfinite(result)
+        assert result > -1e5
+
+    def test_durca_or_cse_no_cse_uses_direct_path(self):
+        """When no nbreak is present, durca_or_cse falls through to direct."""
+        likelihood = DirectUrcaLikelihood(
+            trigger_assumption="durca_or_cse", penalty_value=-1e5
+        )
+
+        result = likelihood.evaluate(self._mock_params(nbreak=None))
+
+        assert jnp.isfinite(result)
+        assert result > -1e5
+
+    def test_durca_or_cse_simple_legacy_behavior(self):
+        """durca_or_cse_simple uses min(n_durca, nbreak) as trigger (old behavior)."""
+        likelihood = DirectUrcaLikelihood(
+            trigger_assumption="durca_or_cse_simple", penalty_value=-1e5
+        )
+        # nbreak = 0.25, n_durca ≈ 0.30 → trigger = 0.25 (nbreak)
+        params = self._mock_params(nbreak=0.25)
+        params["proton_fraction"] = jnp.array([0.02, 0.05, 0.07, 0.10, 0.14])
+
+        result = likelihood.evaluate(params)
+
+        assert jnp.isfinite(result)
+
+    def test_durca_or_cse_simple_invalid_above_tov(self):
+        """durca_or_cse_simple returns penalty when nbreak > n_TOV."""
+        likelihood = DirectUrcaLikelihood(
+            trigger_assumption="durca_or_cse_simple", penalty_value=-1e5
+        )
+        params = self._mock_params(nbreak=0.60)
+        params["proton_fraction"] = jnp.array([0.05, 0.08, 0.10, 0.10, 0.10])
+
+        result = likelihood.evaluate(params)
+
+        assert result == -1e5
+
+    def test_factory_passes_marginalization_params(self):
+        """Factory passes nstar grid parameters through to likelihood."""
+        config = schema.DirectUrcaLikelihoodConfig(
+            trigger_assumption="durca_or_cse",
+            penalty_value=-1e5,
+            nstar_min_nsat=3.0,
+            nstar_max_nsat=8.0,
+            nb_ncool=150,
+            nb_nstar=50,
+        )
+
+        likelihood = factory.create_likelihood(config)
+
+        assert isinstance(likelihood, DirectUrcaLikelihood)
+        assert likelihood.nstar_min_nsat == 3.0
+        assert likelihood.nstar_max_nsat == 8.0
+        assert likelihood.nb_ncool == 150
+        assert likelihood.nb_nstar == 50
+
+    def test_factory_passes_marginalization_params_mtrig_lower(self):
+        """Factory passes nstar grid params to MtrigLowerLikelihood."""
+        config = schema.MtrigLowerLikelihoodConfig(
+            trigger_assumption="durca_or_cse",
+            penalty_value=-1e5,
+            nstar_min_nsat=5.0,
+            nstar_max_nsat=12.0,
+        )
+
+        likelihood = factory.create_likelihood(config)
+
+        assert isinstance(likelihood, MtrigLowerLikelihood)
+        assert likelihood.nstar_min_nsat == 5.0
+        assert likelihood.nstar_max_nsat == 12.0
+        # defaults
+        assert likelihood.nb_ncool == 300
+        assert likelihood.nb_nstar == 100
+
+    def test_default_marginalization_params(self):
+        """Default nstar grid params are 4 nsat, 10 nsat."""
+        likelihood = DirectUrcaLikelihood(trigger_assumption="durca_or_cse")
+        assert likelihood.nstar_min_nsat == 4.0
+        assert likelihood.nstar_max_nsat == 10.0
+        assert likelihood.nb_ncool == 300
+        assert likelihood.nb_nstar == 100
+
+    def test_invalid_trigger_assumption_raises(self):
+        """Invalid trigger_assumption raises ValueError."""
+        with pytest.raises(ValueError, match="trigger_assumption must be"):
+            DirectUrcaLikelihood(trigger_assumption="invalid_value")  # type: ignore[arg-type]
+
+    def test_durca_or_cse_penalty_when_nbreak_gt_ntov(self):
+        """Returns penalty when nbreak > n_TOV (no star can reach cooling threshold)."""
+        likelihood = DirectUrcaLikelihood(
+            trigger_assumption="durca_or_cse", penalty_value=-1e5
+        )
+        # nbreak = 0.60 > n_TOV_fm3 = 0.50
+        params = self._mock_params(nbreak=0.60)
+        params["proton_fraction"] = jnp.array([0.02, 0.05, 0.07, 0.10, 0.14])
+
+        result = likelihood.evaluate(params)
+
+        assert result == -1e5

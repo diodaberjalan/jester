@@ -29,6 +29,9 @@ likelihoods:
   enabled: true
   trigger_assumption: durca_or_cse
   penalty_value: -1e5
+  # Marginalization over unknown CSE-branch cooling density n*:
+  # n* ~ U[max(nbreak, 4 nsat), 10 nsat] (defaults).
+  # Legacy: trigger_assumption: durca_or_cse_simple
 
 sampler:
   type: smc-rw

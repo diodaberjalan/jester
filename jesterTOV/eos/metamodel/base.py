@@ -783,9 +783,7 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
             f = x_e * (1 + 2 * x_e**2) * jnp.sqrt(1 + x_e**2) - jnp.arcsinh(x_e)
 
             e_electron = C_e * f
-            p_electron = (
-                -e_electron + 8.0 / 3.0 * C_e * x_e**3 * jnp.sqrt(1 + x_e**2)
-            )
+            p_electron = -e_electron + 8.0 / 3.0 * C_e * x_e**3 * jnp.sqrt(1 + x_e**2)
             K_electron = 8 * C_e / n * x_e**3 * (3 + 4 * x_e**2) / (
                 jnp.sqrt(1 + x_e**2)
             ) - 9 / n * (e_electron + p_electron)
@@ -802,22 +800,15 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
             f = x_e * (1 + 2 * x_e**2) * jnp.sqrt(1 + x_e**2) - jnp.arcsinh(x_e)
 
             e_electron = C_e * f
-            p_electron = (
-                -e_electron + 8.0 / 3.0 * C_e * x_e**3 * jnp.sqrt(1 + x_e**2)
-            )
+            p_electron = -e_electron + 8.0 / 3.0 * C_e * x_e**3 * jnp.sqrt(1 + x_e**2)
             K_electron = 8 * C_e / n * x_e**3 * (3 + 4 * x_e**2) / (
                 jnp.sqrt(1 + x_e**2)
             ) - 9 / n * (e_electron + p_electron)
 
-            K_Fmu = (
-                (3.0 * jnp.pi**2 * n * muon_fraction) ** (1.0 / 3.0) * utils.hbarc
-            )
+            K_Fmu = (3.0 * jnp.pi**2 * n * muon_fraction) ** (1.0 / 3.0) * utils.hbarc
             C_mu = utils.m_mu**4 / (8.0 * jnp.pi**2) / utils.hbarc**3
             x_mu = K_Fmu / utils.m_mu
-            f = (
-                x_mu * (1 + 2 * x_mu**2) * jnp.sqrt(1 + x_mu**2)
-                - jnp.arcsinh(x_mu)
-            )
+            f = x_mu * (1 + 2 * x_mu**2) * jnp.sqrt(1 + x_mu**2) - jnp.arcsinh(x_mu)
 
             e_muon = C_mu * f
             p_muon = -e_muon + 8.0 / 3.0 * C_mu * x_mu**3 * jnp.sqrt(1 + x_mu**2)
@@ -931,9 +922,9 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
         def guess_val_p(nb):
             return jnp.maximum(jnp.interp(nb, n, yp_quad), 1.0e-9)
 
-        total_energy_density = lambda n_n, n_p: (n_n + n_p) * self.compute_energy_simple(
-            n_n, n_p, v_sat, v_sym2
-        )
+        total_energy_density = lambda n_n, n_p: (
+            n_n + n_p
+        ) * self.compute_energy_simple(n_n, n_p, v_sat, v_sym2)
         nu_p = jax.grad(total_energy_density, argnums=1)
         nu_n = jax.grad(total_energy_density, argnums=0)
 
@@ -976,9 +967,7 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
             def compute_for_single(nb, has_muon, ye):
                 return jax.lax.cond(
                     has_muon,
-                    lambda: beta_npemu(
-                        jnp.array([ye, 1.0e-9]), nb
-                    ),
+                    lambda: beta_npemu(jnp.array([ye, 1.0e-9]), nb),
                     lambda: jnp.array([ye, 0.0]),
                 )
 

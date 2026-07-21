@@ -16,7 +16,7 @@ The lower-bound likelihood uses a non-rapid-cooling object and evaluates
 
     \mathcal{L}_{\rm lower}(m_{\rm trig}) = F_{\rm HESS}(m_{\rm trig}).
 
-Two physical assumptions are supported:
+Three physical assumptions are supported:
 
 ``"durca_only"``
     :math:`m_{\rm trig}=m_{\rm dUrca}` only if direct Urca turns on below
@@ -24,9 +24,29 @@ Two physical assumptions are supported:
     direct Urca must turn on before the CSE transition.
 
 ``"durca_or_cse"``
+    When :math:`n_{\rm dUrca} \leq n_{\rm break}`, direct Urca triggers in the
+    nucleonic branch and :math:`m_{\rm trig} = M(n_{\rm dUrca})`.  When
+    :math:`n_{\rm dUrca} > n_{\rm break}`, the cooling density in the CSE
+    branch is unknown and is marginalized over a uniform prior between
+    :math:`\max(n_{\rm break}, n^*_{\rm min})` and :math:`n^*_{\rm max}`,
+    together with a uniform prior on the stellar central density :math:`n^*`
+    between :math:`n^*_{\rm min}` and :math:`n^*_{\rm max}` (with the
+    constraint :math:`n_{\rm cool} \leq n^*`).
+
+    .. math::
+
+        \mathcal{L} = \int_{n^*_{\rm min}}^{n^*_{\rm max}}
+        \int_{n_{\rm break}}^{n^*}
+        \mathcal{L}_{\rm mtrig}\!\bigl(M(n_{\rm cool})\bigr) \;
+        \frac{1}{n^* - n_{\rm break}} \;
+        \frac{1}{n^*_{\rm max} - n^*_{\rm min}} \;
+        dn_{\rm cool} \, dn^*.
+
+``"durca_or_cse_simple"`` (legacy)
     :math:`m_{\rm trig}` is the lower-mass trigger from direct Urca or the CSE
     transition.  This assumes the CSE branch itself always allows direct Urca,
-    so if ``n_durca > nbreak`` the trigger is ``nbreak``.
+    so if ``n_durca > nbreak`` the trigger is ``nbreak``.  Retained for
+    bookkeeping comparisons against the marginalized formulation.
 """
 
 from typing import Literal
@@ -39,7 +59,8 @@ from jesterTOV import utils
 from jesterTOV.inference.base.likelihood import LikelihoodBase
 
 _NPE_XDU = 1.0 / 9.0
-TriggerAssumption = Literal["durca_only", "durca_or_cse"]
+_N_SAT = 0.16  # nuclear saturation density [fm⁻³]
+TriggerAssumption = Literal["durca_only", "durca_or_cse", "durca_or_cse_simple"]
 
 
 class DirectUrcaLikelihood(LikelihoodBase):
@@ -69,16 +90,29 @@ class DirectUrcaLikelihood(LikelihoodBase):
         trigger_assumption: TriggerAssumption = "durca_only",
         name: str = "Direct_Urca_Trigger_Mass",
         penalty_value: float = -1e5,
+        nstar_min_nsat: float = 4.0,
+        nstar_max_nsat: float = 10.0,
+        nb_ncool: int = 300,
+        nb_nstar: int = 100,
         **legacy_kwargs: object,
     ) -> None:
         super().__init__()
-        if trigger_assumption not in ("durca_only", "durca_or_cse"):
+        if trigger_assumption not in (
+            "durca_only",
+            "durca_or_cse",
+            "durca_or_cse_simple",
+        ):
             raise ValueError(
-                "trigger_assumption must be 'durca_only' or 'durca_or_cse'"
+                "trigger_assumption must be 'durca_only', 'durca_or_cse', "
+                "or 'durca_or_cse_simple'"
             )
         self.trigger_assumption = trigger_assumption
         self.name = name
         self.penalty_value = float(penalty_value)
+        self.nstar_min_nsat = float(nstar_min_nsat)
+        self.nstar_max_nsat = float(nstar_max_nsat)
+        self.nb_ncool = int(nb_ncool)
+        self.nb_nstar = int(nb_nstar)
         self.legacy_kwargs = legacy_kwargs
 
         # SAX J1808.4-3658 Gaussian mixture
@@ -159,7 +193,11 @@ class DirectUrcaLikelihood(LikelihoodBase):
         n_tov_fm3: Float,
         params: dict[str, Float | Array],
     ) -> tuple[Float, Float]:
-        r"""Return ``(n_trig, valid)`` under the configured assumption."""
+        r"""Return ``(n_trig, valid)`` under the configured assumption.
+
+        ``durca_or_cse`` is handled separately in :meth:`evaluate` because it
+        involves a 2D marginalisation when ``n_durca > nbreak``.
+        """
         n_cse_fm3, has_cse_transition = self._cse_transition_density(params)
 
         if self.trigger_assumption == "durca_only":
@@ -169,9 +207,88 @@ class DirectUrcaLikelihood(LikelihoodBase):
             valid = jnp.logical_and(before_tov, before_break)
             return n_durca_fm3, valid
 
+        # durca_or_cse_simple (legacy): use min(n_durca, nbreak) as trigger
         n_trig_fm3 = jnp.minimum(n_durca_fm3, n_cse_fm3)
         valid = n_trig_fm3 < n_tov_fm3
         return n_trig_fm3, valid
+
+    def _marginalize_trigger_likelihood(
+        self,
+        nbreak_fm3: Float,
+        n_tov_fm3: Float,
+        mtov: Float,
+        params: dict[str, Float | Array],
+    ) -> Float:
+        r"""Marginalise over unknown cooling density in the CSE branch.
+
+        Performs the 2D integral
+
+        .. math::
+
+            \mathcal{L}
+            = \int_{n^*_{\rm min}}^{n^*_{\rm max}}
+              \int_{n_{\rm break}}^{n^*}
+              \mathcal{L}_{\rm mtrig}\!\bigl(M(n_{\rm cool})\bigr) \;
+              \frac{1}{n^* - n_{\rm break}} \;
+              \frac{1}{n^*_{\rm max} - n^*_{\rm min}} \;
+              dn_{\rm cool} \, dn^*,
+
+        where :math:`n^*` is the stellar central density and
+        :math:`n_{\rm cool}` is the density at which direct Urca turns on
+        in the CSE branch.  Both are uniformly distributed subject to
+        :math:`n_{\rm cool} \leq n^*`, and a physical cutoff
+        :math:`M(n_{\rm cool}) \leq M_{\rm TOV}` is applied.
+
+        Returns the log of the marginalised likelihood.
+        """
+        nsat = _N_SAT  # fm⁻³
+        nstar_min = jnp.maximum(nbreak_fm3, self.nstar_min_nsat * nsat)
+        nstar_max = self.nstar_max_nsat * nsat
+
+        ncool_grid = jnp.linspace(nbreak_fm3, nstar_max, self.nb_ncool)
+        nstar_grid = jnp.linspace(nstar_min, nstar_max, self.nb_nstar)
+
+        N_COOL, N_STAR = jnp.meshgrid(ncool_grid, nstar_grid, indexing="ij")
+
+        # n_cool must not exceed n_star (cooling only when central density
+        # reaches the threshold).
+        valid_mask = jnp.where(N_COOL <= N_STAR, 1.0, 0.0)
+        prior_nstar = 1.0 / (nstar_max - nstar_min)
+        prior_ncool = jnp.where(
+            N_COOL <= N_STAR,
+            1.0 / jnp.maximum(N_STAR - nbreak_fm3, 1e-12),
+            0.0,
+        )
+
+        # Convert n_cool grid to trigger mass via TOV interpolation.
+        n_trigger_geom = N_COOL * utils.fm_inv3_to_geometric
+        n_grid_geom: Float[Array, " n"] = params["n"]  # type: ignore[assignment]
+        p_grid_geom: Float[Array, " n"] = params["p"]  # type: ignore[assignment]
+        logpc_eos: Float[Array, " n"] = params["logpc_EOS"]  # type: ignore[assignment]
+        masses_eos: Float[Array, " n"] = params["masses_EOS"]  # type: ignore[assignment]
+
+        pc_trigger = jnp.interp(n_trigger_geom, n_grid_geom, p_grid_geom)
+        logpc_trigger = jnp.log10(pc_trigger)
+        m_cool = jnp.interp(logpc_trigger, logpc_eos, masses_eos)
+
+        # Physical cutoff: trigger mass must be below M_TOV.
+        cutoff_mask = jnp.where(m_cool <= mtov, 1.0, 0.0)
+
+        # Evaluate the trigger-mass likelihood at each grid point.
+        log_like_grid = self._log_mtrig_likelihood(m_cool, mtov)
+        joint_likelihood = jnp.exp(log_like_grid)
+
+        # Assemble integrand and integrate via 2D trapezoidal rule.
+        integrand = (
+            joint_likelihood * valid_mask * cutoff_mask * prior_ncool * prior_nstar
+        )
+        integral = jnp.trapezoid(
+            jnp.trapezoid(integrand, x=ncool_grid, axis=0),
+            x=nstar_grid,
+            axis=0,
+        )
+
+        return jnp.log(jnp.maximum(integral, 1e-300))
 
     def _log_survival_likelihood(self, m_trig: Float, mtov: Float) -> Float:
         r"""Evaluate the playground upper-limit likelihood at ``m_trig``."""
@@ -220,6 +337,55 @@ class DirectUrcaLikelihood(LikelihoodBase):
         mtov = jnp.max(params["masses_EOS"])  # type: ignore[arg-type]
 
         n_durca_fm3 = self._find_n_durca(params)
+
+        # --- durca_or_cse: marginalize when n_durca > nbreak ---
+        if self.trigger_assumption == "durca_or_cse":
+            n_cse_fm3, has_cse = self._cse_transition_density(params)
+
+            # Marginalization only needed when direct Urca does NOT occur
+            # in the nucleonic branch (n_durca > nbreak), a CSE
+            # transition exists, and nbreak is below n_TOV (otherwise the
+            # cooling threshold can never be reached in a stable star).
+            needs_marginal = jnp.logical_and(
+                has_cse,
+                jnp.logical_and(
+                    n_durca_fm3 > n_cse_fm3,
+                    n_cse_fm3 < n_tov_fm3,
+                ),
+            )
+
+            # Direct path: use n_durca when it is below nbreak (or no CSE).
+            m_trig_direct = self._mass_at_density(n_durca_fm3, params)
+            valid_direct = jnp.logical_and(
+                n_durca_fm3 < n_tov_fm3,
+                jnp.logical_and(m_trig_direct > 0.0, m_trig_direct < mtov),
+            )
+            log_like_direct = jnp.where(
+                valid_direct,
+                self._log_mtrig_likelihood(m_trig_direct, mtov),
+                self.penalty_value,
+            )
+
+            # Marginalized path: integrate over n_cool, n_star.
+            log_like_marginal = self._marginalize_trigger_likelihood(
+                nbreak_fm3=n_cse_fm3,
+                n_tov_fm3=n_tov_fm3,
+                mtov=mtov,
+                params=params,
+            )
+
+            log_likelihood = jnp.where(
+                needs_marginal, log_like_marginal, log_like_direct
+            )
+
+            return jnp.nan_to_num(
+                log_likelihood,
+                nan=self.penalty_value,
+                posinf=self.penalty_value,
+                neginf=self.penalty_value,
+            )
+
+        # --- durca_only / durca_or_cse_simple ---
         n_trig_fm3, valid_trigger = self._select_trigger_density(
             n_durca_fm3, n_tov_fm3, params
         )
@@ -264,11 +430,19 @@ class MtrigLowerLikelihood(DirectUrcaLikelihood):
         trigger_assumption: TriggerAssumption = "durca_only",
         name: str = "Mtrig_Lower_Bound",
         penalty_value: float = -1e5,
+        nstar_min_nsat: float = 4.0,
+        nstar_max_nsat: float = 10.0,
+        nb_ncool: int = 300,
+        nb_nstar: int = 100,
     ) -> None:
         super().__init__(
             trigger_assumption=trigger_assumption,
             name=name,
             penalty_value=penalty_value,
+            nstar_min_nsat=nstar_min_nsat,
+            nstar_max_nsat=nstar_max_nsat,
+            nb_ncool=nb_ncool,
+            nb_nstar=nb_nstar,
         )
 
         # HESS non-rapid-cooling object (Gaussian).
