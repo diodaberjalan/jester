@@ -129,6 +129,12 @@ Headline result using CST+PDT hotspot model with 3C50 background:
 
 * ``J04374715_amsterdam_CST_PDT_NICER_only_Choudhury2024.npz``
 
+**Maryland group — Miller, Dittmann, Holt et al. 2026** (`Zenodo 17833896 <https://zenodo.org/records/17833896>`_)
+
+Headline result using 3-spot+GPL hotspot model (restricted-model prior):
+
+* ``J04374715_maryland_3spotGPL_NICER_only_RM.npz``
+
 PSR J0614−3329
 ^^^^^^^^^^^^^^
 
