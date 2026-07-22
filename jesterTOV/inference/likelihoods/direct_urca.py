@@ -92,8 +92,8 @@ class DirectUrcaLikelihood(LikelihoodBase):
         penalty_value: float = -1e5,
         nstar_min_nsat: float = 4.0,
         nstar_max_nsat: float = 10.0,
-        nb_ncool: int = 300,
-        nb_nstar: int = 100,
+        nb_ncool: int = 400,
+        nb_nstar: int = 200,
         **legacy_kwargs: object,
     ) -> None:
         super().__init__()
@@ -446,8 +446,8 @@ class MtrigLowerLikelihood(DirectUrcaLikelihood):
         penalty_value: float = -1e5,
         nstar_min_nsat: float = 4.0,
         nstar_max_nsat: float = 10.0,
-        nb_ncool: int = 300,
-        nb_nstar: int = 100,
+        nb_ncool: int = 400,
+        nb_nstar: int = 200,
     ) -> None:
         super().__init__(
             trigger_assumption=trigger_assumption,

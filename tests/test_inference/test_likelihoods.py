@@ -1586,16 +1586,16 @@ class TestDirectUrcaTriggerMassLikelihood:
         assert likelihood.nstar_min_nsat == 5.0
         assert likelihood.nstar_max_nsat == 12.0
         # defaults
-        assert likelihood.nb_ncool == 300
-        assert likelihood.nb_nstar == 100
+        assert likelihood.nb_ncool == 400
+        assert likelihood.nb_nstar == 200
 
     def test_default_marginalization_params(self):
         """Default nstar grid params are 4 nsat, 10 nsat."""
         likelihood = DirectUrcaLikelihood(trigger_assumption="durca_or_cse")
         assert likelihood.nstar_min_nsat == 4.0
         assert likelihood.nstar_max_nsat == 10.0
-        assert likelihood.nb_ncool == 300
-        assert likelihood.nb_nstar == 100
+        assert likelihood.nb_ncool == 400
+        assert likelihood.nb_nstar == 200
 
     def test_invalid_trigger_assumption_raises(self):
         """Invalid trigger_assumption raises ValueError."""

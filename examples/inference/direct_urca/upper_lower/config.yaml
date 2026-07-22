@@ -35,8 +35,8 @@ likelihoods:
   # n* ~ U[4 nsat, 10 nsat] (defaults shown; configurable).
   # nstar_min_nsat: 4.0
   # nstar_max_nsat: 10.0
-  # nb_ncool: 300
-  # nb_nstar: 100
+  # nb_ncool: 400
+  # nb_nstar: 200
   # Legacy behavior (m_trig = M(nbreak)) available as:
   # trigger_assumption: durca_or_cse_simple
 - type: mtrig_lower

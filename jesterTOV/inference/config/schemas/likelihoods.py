@@ -975,20 +975,20 @@ class DirectUrcaLikelihoodConfig(BaseLikelihoodConfig):
     )
 
     nb_ncool: int = Field(
-        default=300,
+        default=400,
         gt=0,
         description=(
             "Number of grid points for the n_cool (cooling density) dimension "
-            "in the 2D trapezoidal marginalization (default: 300)."
+            "in the 2D trapezoidal marginalization (default: 400)."
         ),
     )
 
     nb_nstar: int = Field(
-        default=100,
+        default=200,
         gt=0,
         description=(
             "Number of grid points for the n* (stellar central density) "
-            "dimension in the 2D trapezoidal marginalization (default: 100)."
+            "dimension in the 2D trapezoidal marginalization (default: 200)."
         ),
     )
 
@@ -1061,20 +1061,20 @@ class MtrigLowerLikelihoodConfig(BaseLikelihoodConfig):
     )
 
     nb_ncool: int = Field(
-        default=300,
+        default=400,
         gt=0,
         description=(
             "Number of grid points for the n_cool (cooling density) dimension "
-            "in the 2D trapezoidal marginalization (default: 300)."
+            "in the 2D trapezoidal marginalization (default: 400)."
         ),
     )
 
     nb_nstar: int = Field(
-        default=100,
+        default=200,
         gt=0,
         description=(
             "Number of grid points for the n* (stellar central density) "
-            "dimension in the 2D trapezoidal marginalization (default: 100)."
+            "dimension in the 2D trapezoidal marginalization (default: 200)."
         ),
     )
 
