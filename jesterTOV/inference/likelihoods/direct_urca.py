@@ -245,6 +245,20 @@ class DirectUrcaLikelihood(LikelihoodBase):
         nstar_min = jnp.maximum(nbreak_fm3, self.nstar_min_nsat * nsat)
         nstar_max = self.nstar_max_nsat * nsat
 
+        # Guard against removable singularity at the lower boundary.
+        # When nstar_min == nbreak_fm3 (CSE transition density exceeds
+        # the default lower bound), the prior ∝ 1/(n⁎ − nbreak) diverges
+        # at the first grid point while the inner-integration domain
+        # collapses to zero width.  The trapezoidal rule cannot resolve
+        # this 0/0 limit, so we shift nstar_min by one nstar grid
+        # spacing to keep the integration well-conditioned.
+        nstar_spacing = (nstar_max - nbreak_fm3) / (self.nb_nstar - 1)
+        nstar_min = jnp.where(
+            nstar_min <= nbreak_fm3,
+            nbreak_fm3 + nstar_spacing,
+            nstar_min,
+        )
+
         ncool_grid = jnp.linspace(nbreak_fm3, nstar_max, self.nb_ncool)
         nstar_grid = jnp.linspace(nstar_min, nstar_max, self.nb_nstar)
 
