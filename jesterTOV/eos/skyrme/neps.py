@@ -329,8 +329,12 @@ def compute_skyrme_neps_from_force(
     alph: float,
     beta: float,
     gamma: float,
-) -> dict[str, float]:
-    """Compute Skyrme-derived NEPs from direct force parameters."""
+) -> dict[str, jax.Array]:
+    """Compute Skyrme-derived NEPs from direct force parameters.
+
+    The returned JAX scalars keep this helper compatible with ``jit`` and
+    ``vmap`` callers in the EOS transform.
+    """
 
     primary = _compute_primary_neps_from_force(
         jnp.asarray(t),
@@ -341,15 +345,19 @@ def compute_skyrme_neps_from_force(
         jnp.asarray(gamma),
     )
     legacy = _compute_legacy_aliases(primary)
-    return {key: float(value) for key, value in _with_aliases(primary, legacy).items()}
+    return _with_aliases(primary, legacy)
 
 
 def compute_skyrme_neps_from_params(
     params: Mapping[str, Any],
     *,
     nsat: float | None = None,
-) -> dict[str, float]:
-    """Compute Skyrme-derived NEPs from Jester's Skyrme input parametrization."""
+) -> dict[str, jax.Array]:
+    """Compute Skyrme-derived NEPs from Jester's Skyrme input parametrization.
+
+    The returned JAX scalars keep this helper compatible with ``jit`` and
+    ``vmap`` callers in the EOS transform.
+    """
 
     scalar_params = {key: jnp.asarray(params[key]) for key in SKYRME_INPUT_KEYS}
     t, x = _solve_skyrme_system(scalar_params)
@@ -367,7 +375,7 @@ def compute_skyrme_neps_from_params(
         scalar_params["gamma"],
     )
     legacy = _compute_legacy_aliases(primary)
-    return {key: float(value) for key, value in _with_aliases(primary, legacy).items()}
+    return _with_aliases(primary, legacy)
 
 
 def has_skyrme_parameters(

@@ -1516,6 +1516,37 @@ class TestDirectUrcaTriggerMassLikelihood:
         assert jnp.isfinite(result)
         assert result > -1e5
 
+    def test_cse_marginalization_keeps_full_nstar_prior_normalization(self):
+        """CSE-inaccessible and post-TOV n* values have zero, not renormalized, weight."""
+        likelihood = DirectUrcaLikelihood(
+            trigger_assumption="durca_or_cse",
+            nstar_min_nsat=4.0,
+            nstar_max_nsat=10.0,
+            nb_ncool=161,
+            nb_nstar=97,
+        )
+        likelihood._log_mtrig_likelihood = lambda m_trig, mtov: jnp.zeros_like(m_trig)  # type: ignore[method-assign]
+        n_geom = jnp.array([0.1, 2.0]) * utils.fm_inv3_to_geometric
+        p_geom = jnp.array([1.0, 20.0])
+        params = {
+            "n": n_geom,
+            "p": p_geom,
+            "logpc_EOS": jnp.log10(p_geom),
+            "masses_EOS": jnp.array([1.4, 1.4]),
+        }
+
+        log_likelihood = likelihood._marginalize_trigger_likelihood(
+            nbreak_fm3=jnp.asarray(0.80),  # 5 n_sat
+            n_tov_fm3=jnp.asarray(0.96),  # 6 n_sat
+            mtov=jnp.asarray(2.0),
+            params=params,
+        )
+
+        # Only n* in (5, 6] n_sat contributes.  Its probability is retained
+        # relative to the full [4, 10] n_sat prior, rather than normalized to 1.
+        probability = jnp.exp(log_likelihood)
+        assert 0.15 < probability < 0.18
+
     def test_durca_or_cse_no_cse_uses_direct_path(self):
         """When no nbreak is present, durca_or_cse falls through to direct."""
         likelihood = DirectUrcaLikelihood(

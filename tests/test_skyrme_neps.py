@@ -1,5 +1,7 @@
 """Tests for derived Skyrme nuclear empirical parameters."""
 
+import jax
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
@@ -52,6 +54,16 @@ def test_compute_skyrme_neps_from_params_matches_core_inm_inputs() -> None:
     assert neps["ksymt20"] == pytest.approx(neps["K_sym"])
     assert neps["Ksym20"] == pytest.approx(neps["K_sym"])
     assert neps["Qsym20"] == pytest.approx(neps["Q_sym"])
+
+
+def test_compute_skyrme_neps_from_params_is_jittable() -> None:
+    """Derived NEPs must remain arrays when called by a traced EOS transform."""
+    params = {key: jnp.asarray(value) for key, value in _sample_params().items()}
+
+    neps = jax.jit(compute_skyrme_neps_from_params)(params)
+
+    for value in neps.values():
+        assert jnp.isfinite(value)
 
 
 def test_compute_skyrme_neps_vectorized_supports_fixed_params() -> None:

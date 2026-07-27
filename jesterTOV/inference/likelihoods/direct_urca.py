@@ -28,10 +28,12 @@ Three physical assumptions are supported:
     nucleonic branch and :math:`m_{\rm trig} = M(n_{\rm dUrca})`.  When
     :math:`n_{\rm dUrca} > n_{\rm break}`, the cooling density in the CSE
     branch is unknown and is marginalized over a uniform prior between
-    :math:`\max(n_{\rm break}, n^*_{\rm min})` and :math:`n^*_{\rm max}`,
-    together with a uniform prior on the stellar central density :math:`n^*`
-    between :math:`n^*_{\rm min}` and :math:`n^*_{\rm max}` (with the
-    constraint :math:`n_{\rm cool} \leq n^*`).
+    :math:`n_{\rm break}` and :math:`n^*`, together with a uniform prior on
+    the stellar central density :math:`n^*` between :math:`n^*_{\rm min}`
+    and :math:`n^*_{\rm max}`.  Values of :math:`n^*` below
+    :math:`n_{\rm break}` or above :math:`n_{\rm TOV}` have zero probability,
+    while retaining the normalization of the full configured
+    :math:`[n^*_{\rm min}, n^*_{\rm max}]` prior.
 
     .. math::
 
@@ -242,22 +244,8 @@ class DirectUrcaLikelihood(LikelihoodBase):
         Returns the log of the marginalised likelihood.
         """
         nsat = _N_SAT  # fm⁻³
-        nstar_min = jnp.maximum(nbreak_fm3, self.nstar_min_nsat * nsat)
+        nstar_min = self.nstar_min_nsat * nsat
         nstar_max = self.nstar_max_nsat * nsat
-
-        # Guard against removable singularity at the lower boundary.
-        # When nstar_min == nbreak_fm3 (CSE transition density exceeds
-        # the default lower bound), the prior ∝ 1/(n⁎ − nbreak) diverges
-        # at the first grid point while the inner-integration domain
-        # collapses to zero width.  The trapezoidal rule cannot resolve
-        # this 0/0 limit, so we shift nstar_min by one nstar grid
-        # spacing to keep the integration well-conditioned.
-        nstar_spacing = (nstar_max - nbreak_fm3) / (self.nb_nstar - 1)
-        nstar_min = jnp.where(
-            nstar_min <= nbreak_fm3,
-            nbreak_fm3 + nstar_spacing,
-            nstar_min,
-        )
 
         ncool_grid = jnp.linspace(nbreak_fm3, nstar_max, self.nb_ncool)
         nstar_grid = jnp.linspace(nstar_min, nstar_max, self.nb_nstar)
@@ -265,11 +253,21 @@ class DirectUrcaLikelihood(LikelihoodBase):
         N_COOL, N_STAR = jnp.meshgrid(ncool_grid, nstar_grid, indexing="ij")
 
         # n_cool must not exceed n_star (cooling only when central density
-        # reaches the threshold).
-        valid_mask = jnp.where(N_COOL <= N_STAR, 1.0, 0.0)
+        # reaches the threshold).  Keep the n* prior normalized over its full
+        # configured range: when nbreak exceeds nstar_min, the interval below
+        # nbreak is assigned zero probability rather than being removed and
+        # renormalized.  Central densities above n_TOV are likewise unphysical.
+        valid_mask = jnp.where(
+            jnp.logical_and(
+                N_COOL <= N_STAR,
+                jnp.logical_and(N_STAR > nbreak_fm3, N_STAR <= n_tov_fm3),
+            ),
+            1.0,
+            0.0,
+        )
         prior_nstar = 1.0 / (nstar_max - nstar_min)
         prior_ncool = jnp.where(
-            N_COOL <= N_STAR,
+            valid_mask > 0.0,
             1.0 / jnp.maximum(N_STAR - nbreak_fm3, 1e-12),
             0.0,
         )
