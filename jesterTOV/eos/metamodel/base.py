@@ -919,30 +919,55 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
         # Use the quadratic approximation as initial guess for the exact solver
         yp_quad = self.compute_proton_fraction(v_sat, v_sym2, n)
 
-        def guess_val_p(nb):
-            return jnp.maximum(jnp.interp(nb, n, yp_quad), 1.0e-9)
-
         total_energy_density = lambda n_n, n_p: (
             n_n + n_p
         ) * self.compute_energy_simple(n_n, n_p, v_sat, v_sym2)
         nu_p = jax.grad(total_energy_density, argnums=1)
         nu_n = jax.grad(total_energy_density, argnums=0)
 
-        def beta_npe(guess_ye, nb):
+        def beta_npe_residual(y, nb):
+            n_n = nb * (1 - y)
+            n_p = nb * y
+            mun = nu_n(n_n, n_p) + utils.m_n
+            mup = nu_p(n_n, n_p) + utils.m_p
+            mue = mu_electron(nb * y)
+            scale = jnp.where(jnp.abs(mun) > 1e-6 * utils.m_n, mun, utils.m_n)
+            return (mun - mup - mue) / scale
+
+        def safeguarded_seed(nb, cubic_guess):
+            """Refine only cubic-zero guesses using the exact scalar residual."""
+            lower = jnp.array(1.0e-8)
+            upper = jnp.array(0.5 - 1.0e-8)
+            f_lower = beta_npe_residual(lower, nb)
+            f_upper = beta_npe_residual(upper, nb)
+            has_root = (f_lower * f_upper) <= 0.0
+            refine = (cubic_guess <= 0.0) & has_root
+
+            def bisect_step(_, bounds):
+                lo, hi, f_lo = bounds
+                mid = 0.5 * (lo + hi)
+                f_mid = beta_npe_residual(mid, nb)
+                same_sign = (f_lo < 0.0) == (f_mid < 0.0)
+                new_lo = jnp.where(refine & same_sign, mid, lo)
+                new_hi = jnp.where(refine & same_sign, hi, mid)
+                new_f_lo = jnp.where(refine & same_sign, f_mid, f_lo)
+                return new_lo, new_hi, new_f_lo
+
+            lo, hi, _ = jax.lax.fori_loop(0, 10, bisect_step, (lower, upper, f_lower))
+            seed = jnp.where(refine, 0.5 * (lo + hi), jnp.maximum(cubic_guess, 1e-9))
+            return seed, has_root
+
+        def beta_npe(nb, z0, has_root):
             def fn(z, args=nb):
-                y = z
-                n_n = nb * (1 - y)
-                n_p = nb * y
-                mun = nu_n(n_n, n_p) + utils.m_n
-                mup = nu_p(n_n, n_p) + utils.m_p
-                mue = mu_electron(nb * y)
-                return (mun - mup - mue) / mun
+                return jnp.where(has_root, beta_npe_residual(z, nb), z - z0)
 
-            z0 = jnp.array(guess_ye)
             solver = optx.Newton(rtol=1e-5, atol=1e-6)
-            return optx.root_find(fn, solver, z0, throw=False).value
+            sol = optx.root_find(fn, solver, z0, throw=False)
+            return jnp.where(has_root, sol.value, jnp.nan)
 
-        def beta_npemu(guess, nb):
+        def beta_npemu(nb, ye_guess, has_muon, has_electron_root):
+            safe_ye_guess = jnp.where(has_electron_root, ye_guess, 0.0)
+
             def fn(z, args=nb):
                 ye, ym = z
                 yp = ye + ym
@@ -952,30 +977,33 @@ class MetaModel_EOS_model(Interpolate_EOS_model):
                 mup = nu_p(n_n, n_p) + utils.m_p
                 mue = mu_electron(nb * ye)
                 mumu = mu_muon(nb * ym)
-                return (mun - mup - mue) / mun, (mumu - mue) / mue
+                scale = jnp.where(
+                    jnp.abs(mun) > 1e-6 * utils.m_n, mun, utils.m_n
+                )
+                physical_residual = jnp.array(
+                    [(mun - mup - mue) / scale, (mumu - mue) / mue]
+                )
+                no_muon_residual = jnp.array([ye - safe_ye_guess, ym])
+                return jnp.where(has_muon, physical_residual, no_muon_residual)
 
-            z0 = guess
+            z0 = jnp.array([safe_ye_guess, 1.0e-9])
             solver = optx.Newton(rtol=1e-5, atol=1e-6)
-            return optx.root_find(fn, solver, z0, throw=False).value
+            sol = optx.root_find(fn, solver, z0, throw=False)
+            return jnp.where(has_electron_root, sol.value, jnp.full(2, jnp.nan))
 
         @jax.jit
         def calc_ye_all(nb_array):
-            return jax.vmap(lambda nb: beta_npe(guess_val_p(nb), nb))(nb_array)
+            seeds, has_roots = jax.vmap(safeguarded_seed)(nb_array, yp_quad)
+            ye = jax.vmap(beta_npe)(nb_array, seeds, has_roots)
+            return ye, has_roots
 
         @jax.jit
-        def calc_fractions(nb_full, cond_mask, ye_arr):
-            def compute_for_single(nb, has_muon, ye):
-                return jax.lax.cond(
-                    has_muon,
-                    lambda: beta_npemu(jnp.array([ye, 1.0e-9]), nb),
-                    lambda: jnp.array([ye, 0.0]),
-                )
+        def calc_fractions(nb_full, cond_mask, ye_arr, has_roots):
+            return jax.vmap(beta_npemu)(nb_full, ye_arr, cond_mask, has_roots)
 
-            return jax.vmap(compute_for_single)(nb_full, cond_mask, ye_arr)
-
-        ye_arr = calc_ye_all(n)
-        cond = mu_electron(n * ye_arr) > utils.m_mu
-        final_arr = calc_fractions(n, cond, ye_arr)
+        ye_arr, has_roots = calc_ye_all(n)
+        cond = has_roots & (mu_electron(n * ye_arr) > utils.m_mu)
+        final_arr = calc_fractions(n, cond, ye_arr, has_roots)
 
         electron_fraction = jnp.array(final_arr[:, 0])
         muon_fraction = jnp.array(final_arr[:, 1])

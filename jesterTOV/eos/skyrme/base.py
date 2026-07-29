@@ -404,35 +404,62 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
             mu = utils.m_mu * jnp.sqrt(1 + xm * xm)
             return mu
 
-        def guess_val_p(nb):
-            interp_val = jnp.interp(nb, n, yp_approx)
-            return jnp.where(interp_val == 0.0, 1.0e-9, interp_val)
-
         # Energy density as function of densities
         total_energy_density = lambda n_n, n_p: self.eDenSky(n_n, n_p)
         nu_p = jax.grad(total_energy_density, argnums=1)
         nu_n = jax.grad(total_energy_density, argnums=0)
 
-        def betaHMnpe_optimistix(nb):
-            def fn(z, args=nb):
-                y = z
-                n_n = nb * (1 - y)
-                n_p = nb * y
-                mue = muElec(nb * y)
-                mun = nu_n(n_n, n_p) + utils.m_n
-                mup = nu_p(n_n, n_p) + utils.m_p
-                f = (mun - mup - mue) / mun
-                return f
+        def beta_npe_residual(y, nb):
+            n_n = nb * (1 - y)
+            n_p = nb * y
+            mue = muElec(nb * y)
+            mun = nu_n(n_n, n_p) + utils.m_n
+            mup = nu_p(n_n, n_p) + utils.m_p
+            # Retain the historical normalization wherever it is well-defined.
+            # Only near mun=0 do we substitute a fixed positive scale, avoiding
+            # a pole without changing regular physical evaluations.
+            scale = jnp.where(jnp.abs(mun) > 1e-6 * utils.m_n, mun, utils.m_n)
+            return (mun - mup - mue) / scale
 
-            z0 = jnp.array(guess_val_p(nb))
+        def safeguarded_seed(nb, cubic_guess):
+            """Refine only cubic-zero guesses using the exact scalar residual."""
+            lower = jnp.array(1.0e-8)
+            upper = jnp.array(0.5 - 1.0e-8)
+            f_lower = beta_npe_residual(lower, nb)
+            f_upper = beta_npe_residual(upper, nb)
+            has_root = (f_lower * f_upper) <= 0.0
+            refine = (cubic_guess <= 0.0) & has_root
+
+            def bisect_step(_, bounds):
+                lo, hi, f_lo = bounds
+                mid = 0.5 * (lo + hi)
+                f_mid = beta_npe_residual(mid, nb)
+                same_sign = (f_lo < 0.0) == (f_mid < 0.0)
+                new_lo = jnp.where(refine & same_sign, mid, lo)
+                new_hi = jnp.where(refine & same_sign, hi, mid)
+                new_f_lo = jnp.where(refine & same_sign, f_mid, f_lo)
+                return new_lo, new_hi, new_f_lo
+
+            lo, hi, _ = jax.lax.fori_loop(0, 10, bisect_step, (lower, upper, f_lower))
+            seed = jnp.where(refine, 0.5 * (lo + hi), jnp.maximum(cubic_guess, 1e-9))
+            return seed, has_root
+
+        def betaHMnpe_optimistix(nb, z0, has_root):
+            def fn(z, args=nb):
+                # If no root exists in the physical proton-fraction interval,
+                # solve a trivial residual and return NaN below. This avoids
+                # wasting 1000 Newton steps on a proposal that must be rejected.
+                return jnp.where(has_root, beta_npe_residual(z, nb), z - z0)
 
             # Use Newton with Dogleg fallback for robustness and speed
             sol = optx.root_find(
                 fn, optx.Newton(rtol=1e-5, atol=1e-6), z0, throw=False, max_steps=1000
             )
-            return sol.value
+            return jnp.where(has_root, sol.value, jnp.nan)
 
-        def betaHMnpemu_optimistix(nb, ye_guess):
+        def betaHMnpemu_optimistix(nb, ye_guess, has_muon, has_electron_root):
+            safe_ye_guess = jnp.where(has_electron_root, ye_guess, 0.0)
+
             def fn(z, args):
                 y1, y2 = z
                 y = y1 + y2
@@ -442,38 +469,47 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
                 mup = nu_p(n_n, n_p) + utils.m_p
                 mue = muElec(nb * y1)
                 mumu = muMuon(nb * y2)
-                f1 = (mun - mup - mue) / mun
+                scale = jnp.where(
+                    jnp.abs(mun) > 1e-6 * utils.m_n, mun, utils.m_n
+                )
+                f1 = (mun - mup - mue) / scale
+                # The electron chemical potential is strictly positive here,
+                # so preserve the original normalization exactly.
                 f2 = (mumu - mue) / mue
-                return f1, f2
+
+                # This function is vmapped below. Absent-muon lanes solve a
+                # trivial residual whose root is exactly the no-muon result.
+                physical_residual = jnp.array([f1, f2])
+                no_muon_residual = jnp.array([y1 - safe_ye_guess, y2])
+                return jnp.where(has_muon, physical_residual, no_muon_residual)
 
             # Use the no-muon solution as the electron fraction initial guess
             # (much better than the approximate guess when S(n) < 0 at high density)
-            z0 = jnp.array([ye_guess, 1.0e-9])
+            z0 = jnp.array([safe_ye_guess, 1.0e-9])
             # Use Newton with Dogleg fallback for robustness and speed
             sol = optx.root_find(
                 fn, optx.Newton(rtol=1e-5, atol=1e-6), z0, throw=False, max_steps=1000
             )
-            return sol.value
+            return jnp.where(has_electron_root, sol.value, jnp.full(2, jnp.nan))
 
         @jax.jit
         def calc_ye_all_jit(nb_array):
-            return jax.vmap(lambda nb: betaHMnpe_optimistix(nb))(nb_array)
+            seeds, has_roots = jax.vmap(safeguarded_seed)(nb_array, yp_approx)
+            ye = jax.vmap(betaHMnpe_optimistix)(nb_array, seeds, has_roots)
+            return ye, has_roots
 
         @jax.jit
-        def calc_conditional_fractions(nb_full, cond_mask, ye_arr):
-            def compute_for_single(nb, has_muon, ye):
-                result = jax.lax.cond(
-                    has_muon,
-                    lambda: betaHMnpemu_optimistix(nb, ye),
-                    lambda: jnp.array([ye, 0.0]),
-                )
-                return result
+        def calc_conditional_fractions(nb_full, cond_mask, ye_arr, has_roots):
+            return jax.vmap(betaHMnpemu_optimistix)(
+                nb_full,
+                ye_arr,
+                cond_mask,
+                has_roots,
+            )
 
-            return jax.vmap(compute_for_single)(nb_full, cond_mask, ye_arr)
-
-        ye_arr = calc_ye_all_jit(n)
-        cond = muElec(n * ye_arr) > utils.m_mu
-        final_arr = calc_conditional_fractions(n, cond, ye_arr)
+        ye_arr, has_roots = calc_ye_all_jit(n)
+        cond = has_roots & (muElec(n * ye_arr) > utils.m_mu)
+        final_arr = calc_conditional_fractions(n, cond, ye_arr, has_roots)
 
         yp_arr = final_arr[:, 0] + final_arr[:, 1]
 
