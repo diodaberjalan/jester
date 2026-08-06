@@ -115,6 +115,7 @@ class JesterTransform(NtoMTransform):
         ndat_TOV: int = 100,
         min_nsat_TOV: float = 0.75,
         fixed_params: dict[str, float] | None = None,
+        skyrme_saturation_parameter: str | None = None,
         **kwargs: Any,  # FIXME: remove kwargs argument in a future release
     ) -> None:
         self.eos = eos
@@ -128,6 +129,18 @@ class JesterTransform(NtoMTransform):
 
         # Get required parameters from EOS and TOV solver
         self.eos_params = eos.get_required_parameters()
+        if skyrme_saturation_parameter is not None:
+            if skyrme_saturation_parameter not in {"nsat", "kfsat"}:
+                raise ValueError(
+                    "skyrme_saturation_parameter must be 'nsat' or 'kfsat'."
+                )
+            try:
+                saturation_index = self.eos_params.index("kfsat")
+            except ValueError as error:
+                raise ValueError(
+                    "A Skyrme saturation parameter was selected for a non-Skyrme EOS."
+                ) from error
+            self.eos_params[saturation_index] = skyrme_saturation_parameter
         self.tov_params = tov_solver.get_required_parameters()
 
         # Construct name mapping if not provided.
@@ -167,6 +180,7 @@ class JesterTransform(NtoMTransform):
         keep_names: list[str] | None = None,
         max_nbreak_nsat: float | None = None,
         fixed_params: dict[str, float] | None = None,
+        skyrme_saturation_parameter: str | None = None,
     ) -> "JesterTransform":
         """Create transform from configuration objects.
 
@@ -217,6 +231,7 @@ class JesterTransform(NtoMTransform):
             ndat_TOV=tov_config.ndat_TOV,
             min_nsat_TOV=tov_config.min_nsat_TOV,
             fixed_params=fixed_params,
+            skyrme_saturation_parameter=skyrme_saturation_parameter,
         )
 
     @staticmethod

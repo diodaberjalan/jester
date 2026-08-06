@@ -194,6 +194,19 @@ def setup_transform(
     """
     _fixed_params = fixed_params or {}
 
+    skyrme_saturation_parameter = None
+    if isinstance(config.eos, BaseSkyrmeEOSConfig) and prior is not None:
+        available = set(prior.parameter_names).union(_fixed_params)
+        saturation_parameters = [
+            name for name in ("nsat", "kfsat") if name in available
+        ]
+        if len(saturation_parameters) != 1:
+            raise ValueError(
+                "Skyrme priors must contain exactly one of 'nsat' or 'kfsat' "
+                f"(sampled or Fixed); found {saturation_parameters or 'neither'}."
+            )
+        skyrme_saturation_parameter = saturation_parameters[0]
+
     # Determine max_nbreak_nsat for CSE-style EOS: compare config vs prior bound.
     # TODO: in a future version, need to improve this...
     max_nbreak_nsat = None
@@ -237,6 +250,7 @@ def setup_transform(
         keep_names=keep_names,
         max_nbreak_nsat=max_nbreak_nsat,
         fixed_params=_fixed_params if _fixed_params else None,
+        skyrme_saturation_parameter=skyrme_saturation_parameter,
     )
 
     # Validate that all required parameters are present.

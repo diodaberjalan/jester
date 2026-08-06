@@ -9,7 +9,10 @@ from typing import Union
 from jesterTOV import utils
 from jesterTOV.eos.base import Interpolate_EOS_model
 from jesterTOV.eos.crust import Crust
-from jesterTOV.eos.skyrme.neps import compute_skyrme_neps_from_params
+from jesterTOV.eos.skyrme.neps import (
+    compute_skyrme_neps_from_params,
+    normalize_skyrme_saturation_parameter,
+)
 from jesterTOV.tov.data_classes import EOSData
 from jesterTOV.logging_config import get_logger
 
@@ -172,9 +175,9 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
                 - x0, x1, x4: Exchange parameter inputs
                 - alph: Maps to sigma (density dependence exponent)
                 - beta, gamma: Density dependence exponents
-                - kfsat: Fermi momentum at saturation
+                - kfsat or nsat: Exactly one saturation coordinate
                 - av: Saturation energy per nucleon
-                - J: Symmetry energy
+                - J: Quadratic symmetry-energy coefficient at saturation
                 - meffs, meffv: Effective masses (scalar, vector)
                 - Kinf: Incompressibility
                 - eNMhd: Energy density at high density
@@ -182,6 +185,8 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
         Returns:
             tuple: (t_final, x_final) where each is an array of 6 Skyrme parameters
         """
+        p = normalize_skyrme_saturation_parameter(p)
+
         # Constants
         pi = jnp.pi
         hbm = 20.73553000
@@ -600,9 +605,9 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
                 - **x0**, **x1**, **x4**: Exchange parameter inputs
                 - **alph**: Maps to sigma (density dependence exponent)
                 - **beta**, **gamma**: Density dependence exponents
-                - **kfsat**: Fermi momentum at saturation
+                - **kfsat** or **nsat**: Exactly one saturation coordinate
                 - **av**: Saturation energy per nucleon
-                - **J**: Symmetry energy
+                - **J**: Quadratic symmetry-energy coefficient at saturation
                 - **meffs**, **meffv**: Effective masses (scalar, vector)
                 - **Kinf**: Incompressibility
                 - **eNMhd**: Energy density at high density
@@ -633,6 +638,7 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
         """
 
         del ngrids, cs2grids
+        params = normalize_skyrme_saturation_parameter(params)
 
         # Handle calculate_durca: use instance default if not provided
         if calculate_durca is None:
@@ -770,7 +776,11 @@ class Skyrme_EOS_model(Interpolate_EOS_model):
             "n_orig": self.n_Skyrme,
             "proton_fraction": proton_fraction,
         }
-        extra.update(compute_skyrme_neps_from_params(params, nsat=self.nsat))
+        # The empirical parameters are defined at the saturation point of this
+        # Skyrme force, which is set per sample by kfsat (or nsat). Do not use the EOS
+        # grid reference density (self.nsat) here: it is fixed at 0.16 fm^-3
+        # and is generally not the sample's pressure-zero density.
+        extra.update(compute_skyrme_neps_from_params(params))
         if self.with_muon and e_fraction is not None:
             extra["e_fraction"] = e_fraction
             extra["muon_fraction"] = muon_fraction

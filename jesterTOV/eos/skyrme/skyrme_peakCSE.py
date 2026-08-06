@@ -118,9 +118,9 @@ class Skyrme_with_peakCSE_EOS_model(Interpolate_EOS_model):
                     - **t2**, **t4**: Input parameters
                     - **x0**, **x1**, **x4**: Exchange parameter inputs
                     - **alph**, **beta**, **gamma**: Density dependence exponents
-                    - **kfsat**: Fermi momentum at saturation
+                    - **kfsat** or **nsat**: Exactly one saturation coordinate
                     - **av**: Saturation energy per nucleon
-                    - **J**: Symmetry energy
+                    - **J**: Quadratic symmetry-energy coefficient at saturation
                     - **meffs**, **meffv**: Effective masses
                     - **Kinf**: Incompressibility
                     - **eNMhd**: Energy density at high density

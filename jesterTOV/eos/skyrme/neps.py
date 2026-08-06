@@ -28,16 +28,22 @@ SKYRME_INPUT_KEYS: tuple[str, ...] = (
     "Kinf",
     "eNMhd",
 )
+SKYRME_SATURATION_KEYS: tuple[str, str] = ("nsat", "kfsat")
+SKYRME_COMMON_INPUT_KEYS: tuple[str, ...] = tuple(
+    key for key in SKYRME_INPUT_KEYS if key != "kfsat"
+)
 
 SKYRME_RESULT_PRIMARY_KEYS: tuple[str, ...] = (
     "E_sat",
     "P_sat",
     "K_sat",
     "Q_sat",
+    "Z_sat",
     "E_sym",
     "L_sym",
     "K_sym",
     "Q_sym",
+    "Z_sym",
 )
 
 SKYRME_RESULT_ALIAS_KEYS: tuple[str, ...] = (
@@ -61,6 +67,34 @@ SKYRME_RESULT_NEP_KEYS: tuple[str, ...] = (
 
 def _nsat_from_kfsat(kfsat: jax.Array) -> jax.Array:
     return 2.0 * kfsat**3 / (3.0 * jnp.pi**2)
+
+
+def _kfsat_from_nsat(nsat: jax.Array) -> jax.Array:
+    return (1.5 * jnp.pi**2 * nsat) ** (1.0 / 3.0)
+
+
+def normalize_skyrme_saturation_parameter(
+    params: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Require exactly one saturation coordinate and derive ``kfsat``.
+
+    New priors may sample ``nsat`` directly. Historical priors using ``kfsat``
+    are unchanged. Supplying both is ambiguous because it can represent two
+    inconsistent saturation densities.
+    """
+    has_nsat = "nsat" in params
+    has_kfsat = "kfsat" in params
+    if has_nsat == has_kfsat:
+        present = [name for name in SKYRME_SATURATION_KEYS if name in params]
+        raise ValueError(
+            "Skyrme parameters must contain exactly one of 'nsat' or 'kfsat'; "
+            f"found {present or 'neither'}."
+        )
+    normalized = dict(params)
+    if has_nsat:
+        normalized["kfsat"] = _kfsat_from_nsat(jnp.asarray(params["nsat"]))
+        del normalized["nsat"]
+    return normalized
 
 
 def _solve_skyrme_system(
@@ -263,9 +297,21 @@ def _compute_primary_neps_from_force(
     beta: jax.Array,
     gamma: jax.Array,
 ) -> dict[str, jax.Array]:
+    """Evaluate all empirical derivatives at ``x = 0``.
+
+    Here ``x = (n - n_sat) / (3 n_sat)`` and the supplied ``nsat`` must be
+    the pressure-zero density of the symmetric-matter Skyrme functional.  The
+    default parameter path obtains it from the sample's ``kfsat`` or ``nsat``.
+    """
     def e_sm(xvar: jax.Array) -> jax.Array:
         density = nsat * (1.0 + 3.0 * xvar)
         return _energy_per_particle(density, 0.0, t, x, alph, beta, gamma)
+
+    def fourth_derivative_at_zero(function: Any) -> jax.Array:
+        # Forward-mode avoids the large nested reverse-mode trace of Z.
+        for _ in range(4):
+            function = jax.jacfwd(function)
+        return function(jnp.asarray(0.0))
 
     def symmetry_energy(xvar: jax.Array) -> jax.Array:
         density = nsat * (1.0 + 3.0 * xvar)
@@ -279,21 +325,25 @@ def _compute_primary_neps_from_force(
     p_sat = jax.grad(e_sm)(0.0)
     k_sat = jax.grad(jax.grad(e_sm))(0.0)
     q_sat = jax.grad(jax.grad(jax.grad(e_sm)))(0.0)
+    z_sat = fourth_derivative_at_zero(e_sm)
 
     e_sym = symmetry_energy(0.0)
     l_sym = jax.grad(symmetry_energy)(0.0)
     k_sym = jax.grad(jax.grad(symmetry_energy))(0.0)
     q_sym = jax.grad(jax.grad(jax.grad(symmetry_energy)))(0.0)
+    z_sym = fourth_derivative_at_zero(symmetry_energy)
 
     return {
         "E_sat": e_sat,
         "P_sat": p_sat,
         "K_sat": k_sat,
         "Q_sat": q_sat,
+        "Z_sat": z_sat,
         "E_sym": e_sym,
         "L_sym": l_sym,
         "K_sym": k_sym,
         "Q_sym": q_sym,
+        "Z_sym": z_sym,
     }
 
 
@@ -359,7 +409,10 @@ def compute_skyrme_neps_from_params(
     ``vmap`` callers in the EOS transform.
     """
 
-    scalar_params = {key: jnp.asarray(params[key]) for key in SKYRME_INPUT_KEYS}
+    normalized = normalize_skyrme_saturation_parameter(params)
+    scalar_params = {
+        key: jnp.asarray(normalized[key]) for key in SKYRME_INPUT_KEYS
+    }
     t, x = _solve_skyrme_system(scalar_params)
     sat_density = (
         jnp.asarray(nsat)
@@ -387,7 +440,8 @@ def has_skyrme_parameters(
     available = set(posterior)
     if fixed_params:
         available.update(fixed_params)
-    return all(key in available for key in SKYRME_INPUT_KEYS)
+    has_one_saturation_parameter = ("nsat" in available) ^ ("kfsat" in available)
+    return all(key in available for key in SKYRME_COMMON_INPUT_KEYS) and has_one_saturation_parameter
 
 
 def _infer_sample_count(posterior: Mapping[str, Any]) -> int:
@@ -408,7 +462,7 @@ def _posterior_param_arrays(
     combined: dict[str, np.ndarray] = {}
     fixed_params = fixed_params or {}
 
-    for key in SKYRME_INPUT_KEYS:
+    for key in SKYRME_COMMON_INPUT_KEYS:
         if key in posterior:
             arr = np.asarray(posterior[key])
         elif key in fixed_params:
@@ -419,6 +473,30 @@ def _posterior_param_arrays(
         if arr.ndim == 0:
             arr = np.full((n_samples,), float(arr))
         combined[key] = arr
+
+    saturation_values: dict[str, np.ndarray] = {}
+    for key in SKYRME_SATURATION_KEYS:
+        if key in posterior:
+            arr = np.asarray(posterior[key])
+        elif key in fixed_params:
+            arr = np.asarray(fixed_params[key])
+        else:
+            continue
+        if arr.ndim == 0:
+            arr = np.full((n_samples,), float(arr))
+        saturation_values[key] = arr
+
+    if len(saturation_values) != 1:
+        raise ValueError(
+            "Skyrme posterior must contain exactly one of 'nsat' or 'kfsat'; "
+            f"found {sorted(saturation_values) or 'neither'}."
+        )
+    if "nsat" in saturation_values:
+        combined["kfsat"] = np.asarray(
+            _kfsat_from_nsat(jnp.asarray(saturation_values["nsat"]))
+        )
+    else:
+        combined["kfsat"] = saturation_values["kfsat"]
 
     return combined
 

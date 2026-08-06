@@ -2,9 +2,14 @@
 
 import pytest
 from unittest.mock import MagicMock
-from jesterTOV.inference.config.schema import MetamodelEOSConfig, GRTOVConfig
+from jesterTOV.inference.config.schema import (
+    GRTOVConfig,
+    MetamodelEOSConfig,
+    SkyrmeEOSConfig,
+)
 from jesterTOV.inference.run_inference import setup_transform
 from jesterTOV.inference.base.prior import CombinePrior, UniformPrior
+from jesterTOV.eos.skyrme.neps import SKYRME_COMMON_INPUT_KEYS
 
 
 def test_missing_parameters_raises_error():
@@ -180,6 +185,60 @@ def test_fixed_param_satisfies_required_param():
     # Fixed params should not appear in get_parameter_names()
     for p in tov_required:
         assert p not in transform.get_parameter_names()
+
+
+def _make_skyrme_prior(saturation_parameter: str) -> CombinePrior:
+    names = [*SKYRME_COMMON_INPUT_KEYS, saturation_parameter]
+    return CombinePrior(
+        [UniformPrior(0.1, 1.0, parameter_names=[name]) for name in names]
+    )
+
+
+@pytest.mark.parametrize("saturation_parameter", ["nsat", "kfsat"])
+def test_skyrme_transform_accepts_one_saturation_coordinate(
+    saturation_parameter: str,
+) -> None:
+    config = MagicMock()
+    config.eos = SkyrmeEOSConfig(type="skyrme")
+    config.tov = GRTOVConfig(type="gr")
+
+    transform = setup_transform(
+        config, prior=_make_skyrme_prior(saturation_parameter)
+    )
+
+    parameter_names = transform.get_parameter_names()
+    assert saturation_parameter in parameter_names
+    assert ({"nsat", "kfsat"} - {saturation_parameter}).isdisjoint(parameter_names)
+
+
+def test_skyrme_transform_rejects_both_saturation_coordinates() -> None:
+    config = MagicMock()
+    config.eos = SkyrmeEOSConfig(type="skyrme")
+    config.tov = GRTOVConfig(type="gr")
+    prior = CombinePrior(
+        _make_skyrme_prior("nsat").base_prior
+        + [UniformPrior(0.1, 1.0, parameter_names=["kfsat"])]
+    )
+
+    with pytest.raises(ValueError, match="exactly one of 'nsat' or 'kfsat'"):
+        setup_transform(config, prior=prior)
+
+
+def test_skyrme_transform_accepts_a_fixed_nsat() -> None:
+    config = MagicMock()
+    config.eos = SkyrmeEOSConfig(type="skyrme")
+    config.tov = GRTOVConfig(type="gr")
+    prior = CombinePrior(
+        [
+            UniformPrior(0.1, 1.0, parameter_names=[name])
+            for name in SKYRME_COMMON_INPUT_KEYS
+        ]
+    )
+
+    transform = setup_transform(config, prior=prior, fixed_params={"nsat": 0.16})
+
+    assert "nsat" not in transform.get_parameter_names()
+    assert "kfsat" not in transform.get_parameter_names()
 
 
 def test_fixed_param_injected_in_forward():
