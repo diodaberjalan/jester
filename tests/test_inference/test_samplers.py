@@ -875,6 +875,49 @@ class TestBlackJAXSMCNUTSSampler:
         # Should have correct metadata
         assert sampler.metadata["kernel_type"] == "random_walk"
 
+    @pytest.mark.slow
+    def test_smc_post_sampling_extends_particles_without_changing_evidence(self):
+        """SMC post-sampling supplies requested EOS draws after convergence."""
+        from jesterTOV.inference.config.schema import SMCRandomWalkSamplerConfig
+        from jesterTOV.inference.samplers.blackjax.smc.random_walk import (
+            BlackJAXSMCRandomWalkSampler,
+        )
+
+        prior = UniformPrior(0.0, 1.0, parameter_names=["x"])
+        likelihood = MockLikelihood()
+        common_config = {
+            "n_particles": 20,
+            "n_mcmc_steps": 1,
+            "target_ess": 0.8,
+            "random_walk_sigma": 0.1,
+            "log_prob_batch_size": 7,
+            "output_dir": "./test_output/",
+        }
+        baseline_config = SMCRandomWalkSamplerConfig(
+            **common_config, n_eos_samples=20
+        )
+        post_config = SMCRandomWalkSamplerConfig(**common_config, n_eos_samples=35)
+
+        baseline_sampler = BlackJAXSMCRandomWalkSampler(
+            likelihood, prior, [], [], baseline_config
+        )
+        post_sampler = BlackJAXSMCRandomWalkSampler(
+            likelihood, prior, [], [], post_config
+        )
+        baseline_sampler.sample(jax.random.PRNGKey(123))
+        post_sampler.sample(jax.random.PRNGKey(123))
+
+        post_samples = post_sampler.get_samples()
+        assert post_sampler.get_n_samples() == 35
+        assert post_samples["x"].shape == (35,)
+        assert post_sampler.get_log_prob().shape == (35,)
+        assert jnp.isclose(jnp.sum(post_samples["weights"]), 1.0)
+        assert post_sampler.metadata["post_sample_count"] == 15
+        assert post_sampler.metadata["post_sample_mcmc_steps"] == 1
+        assert post_sampler.metadata["logZ"] == pytest.approx(
+            baseline_sampler.metadata["logZ"]
+        )
+
 
 class TestBlackJAXNSAWSampler:
     """Test BlackJAX Nested Sampling with Acceptance Walk sampler."""

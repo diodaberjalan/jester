@@ -231,6 +231,10 @@ class InferenceResult:
                     "mean_acceptance": float(smc_metadata["mean_acceptance"]),
                     "logZ": float(smc_metadata["logZ"]),
                     "logZ_err": float(smc_metadata["logZ_err"]),
+                    "post_sample_count": int(smc_metadata["post_sample_count"]),
+                    "post_sample_mcmc_steps": int(
+                        smc_metadata["post_sample_mcmc_steps"]
+                    ),
                 }
             )
 
@@ -752,6 +756,13 @@ class InferenceResult:
             )
             if "logZ" in self.metadata:
                 lines.append(f"  Evidence: log(Z) = {self.metadata.get('logZ', 0):.2f}")
+            post_sample_count = self.metadata.get("post_sample_count", 0)
+            if post_sample_count:
+                lines.append(
+                    "  Post-sampled draws: "
+                    f"{post_sample_count} ({self.metadata.get('post_sample_mcmc_steps', '?')} "
+                    "MCMC transitions per draw)"
+                )
 
         elif self.sampler_type == "blackjax_ns_aw":
             lines.append("\nBlackJAX Nested Sampling Configuration:")

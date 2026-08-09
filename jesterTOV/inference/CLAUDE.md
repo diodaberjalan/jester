@@ -314,7 +314,7 @@ class SamplerOutput:
 ```
 
 **Metadata Contents** (sampler-specific):
-- **SMC samplers**: ESS (effective sample size), acceptance rates, weights, tempering schedule
+- **SMC samplers**: ESS (effective sample size), acceptance rates, weights, tempering schedule, and post-sampling metadata. When `n_eos_samples > n_particles`, final-temperature MCMC extends the posterior draws after evidence estimation, without changing `logZ`.
 - **FlowMC**: flow training history, MCMC acceptance rates
 - **Nested sampling**: evidence (log Z), evidence error, iteration counts
 

@@ -58,6 +58,7 @@ Four sampler backends available for Bayesian inference:
    - Gaussian Random Walk kernel with sigma adaptation
    - Target ESS: 0.9, requires ~10-30 MCMC steps per tempering level
    - Can run locally on laptop without GPU
+   - If `n_eos_samples > n_particles`, extends the final resampled population with bounded-memory posterior MCMC post-sampling; this never changes the completed evidence estimate
 
 3. **BlackJAX SMC-NUTS** (`type: "smc-nuts"`) - Sequential Monte Carlo with NUTS kernel
    - Production ready, well-tested

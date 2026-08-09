@@ -225,6 +225,129 @@ class BlackjaxSMCSampler(BlackjaxSampler):
         """Return the kernel name for logging/plotting."""
         pass
 
+    def _post_sample(
+        self,
+        key: PRNGKeyArray,
+        logprior_fn: Callable,
+        loglikelihood_fn: Callable,
+        logposterior_fn: Callable,
+    ) -> int:
+        """Extend final SMC particles with posterior MCMC samples.
+
+        The SMC evidence estimate is complete before this method is called. The
+        additional draws therefore use the final posterior only and do not alter
+        the tempering schedule, particle weights, or evidence estimate. Each
+        retained draw is obtained by applying ``n_mcmc_steps`` transitions of the
+        configured SMC kernel to a resampled final particle.
+
+        Chains are processed in blocks no larger than ``log_prob_batch_size`` so
+        intermediate MCMC state scales with that setting rather than with the
+        requested final sample count.
+
+        Parameters
+        ----------
+        key : PRNGKeyArray
+            JAX random key.
+        logprior_fn : Callable
+            Flat-space log-prior function required to set up the SMC kernel.
+        loglikelihood_fn : Callable
+            Flat-space log-likelihood function required to set up the SMC kernel.
+        logposterior_fn : Callable
+            Flat-space posterior log-density at the final temperature.
+
+        Returns
+        -------
+        int
+            Number of posterior MCMC samples appended to the final SMC particles.
+        """
+        if self._particles_flat is None:
+            raise RuntimeError("No final SMC particles available for post-sampling")
+
+        n_initial = len(self._particles_flat)
+        n_extra = max(0, self.config.n_eos_samples - n_initial)
+        if n_extra == 0:
+            return 0
+
+        logger.info(
+            "Post-sampling %d additional posterior draws with %s MCMC "
+            "(%d transitions per draw).",
+            n_extra,
+            self._get_kernel_name(),
+            self.config.n_mcmc_steps,
+        )
+
+        # Rebuild the configured kernel at lambda=1. For the random-walk kernel,
+        # this also derives a proposal covariance from all final SMC particles.
+        mcmc_step_fn, mcmc_init_fn, init_params, _ = self._setup_mcmc_kernel(
+            logprior_fn,
+            loglikelihood_fn,
+            logposterior_fn,
+            self._particles_flat,
+        )
+
+        current_particles = self._particles_flat
+        n_dim = current_particles.shape[1]
+        n_total = n_initial + n_extra
+
+        # Allocate the sole final-particle buffer once. This avoids retaining an
+        # MCMC history whose size would grow with the number of requested samples.
+        final_particles = jnp.empty((n_total, n_dim), dtype=current_particles.dtype)
+        final_particles = final_particles.at[:n_initial].set(current_particles)
+
+        n_remaining = n_extra
+        output_offset = n_initial
+        chain_offset = 0
+        max_chains = min(n_initial, self.config.log_prob_batch_size)
+
+        while n_remaining > 0:
+            n_chains = min(max_chains, n_remaining)
+            chain_indices = (
+                jnp.arange(n_chains, dtype=jnp.int32) + chain_offset
+            ) % n_initial
+            positions = current_particles[chain_indices]
+            states = jax.vmap(mcmc_init_fn, in_axes=(0, None))(
+                positions, logposterior_fn
+            )
+
+            def transition(
+                _: int, carry: tuple[Any, PRNGKeyArray]
+            ) -> tuple[Any, PRNGKeyArray]:
+                """Apply one independent MCMC transition to every active chain."""
+                states, transition_key = carry
+                transition_key, step_key = jax.random.split(transition_key)
+                chain_keys = jax.random.split(step_key, n_chains)
+                next_states, _ = jax.vmap(
+                    lambda rng_key, state: mcmc_step_fn(
+                        rng_key, state, logposterior_fn, **init_params
+                    )
+                )(chain_keys, states)
+                return next_states, transition_key
+
+            states, key = jax.lax.fori_loop(
+                0,
+                self.config.n_mcmc_steps,
+                transition,
+                (states, key),
+            )
+            sampled_positions = states.position
+            current_particles = current_particles.at[chain_indices].set(
+                sampled_positions
+            )
+            final_particles = jax.lax.dynamic_update_slice(
+                final_particles,
+                sampled_positions,
+                (output_offset, 0),
+            )
+
+            n_remaining -= n_chains
+            output_offset += n_chains
+            chain_offset = (chain_offset + n_chains) % n_initial
+
+        self._particles_flat = final_particles
+        self._weights = jnp.ones(n_total) / n_total
+        logger.info("Post-sampling complete: %d final posterior draws", n_total)
+        return n_extra
+
     def sample(self, key: PRNGKeyArray) -> None:
         """Run SMC until λ = 1 (posterior).
 
@@ -498,6 +621,12 @@ class BlackjaxSMCSampler(BlackjaxSampler):
         self._particles_flat = self._particles_flat[resample_idx]
         self._weights = jnp.ones(self.config.n_particles) / self.config.n_particles
 
+        # SMC evidence is now final. Optionally extend the posterior sample set
+        # with MCMC draws when EOS postprocessing requests more than n_particles.
+        post_sample_count = self._post_sample(
+            key, logprior_fn, loglikelihood_fn, logposterior_fn
+        )
+
         # Compute summary statistics
         mean_ess = float(jnp.mean(ess_history[:steps]))
         min_ess = float(jnp.min(ess_history[:steps]))
@@ -521,6 +650,10 @@ class BlackjaxSMCSampler(BlackjaxSampler):
             "mean_acceptance": mean_acceptance,
             "logZ": float(log_evidence),
             "logZ_err": float(log_evidence_err),
+            "post_sample_count": post_sample_count,
+            "post_sample_mcmc_steps": (
+                self.config.n_mcmc_steps if post_sample_count > 0 else 0
+            ),
             "sampling_time_seconds": end_time - start_time,
             "loop_time_seconds": loop_end_time - loop_start_time,
             "tempering_param_history": tempering_param_history[:steps].tolist(),

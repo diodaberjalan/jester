@@ -153,3 +153,6 @@ dmypy.json
 
 # Cython debug symbols
 cython_debug/
+
+# Locally generated large post-sampling inference runs
+examples/inference/spectral_reparam/*_post_sample_*/

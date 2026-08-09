@@ -698,7 +698,7 @@ BlackJAX SMC with adaptive tempering and Gaussian Random Walk kernel. **Producti
 sampler:
   type: "smc-rw"             # Sampler type identifier
   output_dir: "./outdir/"    # Output directory for results
-  n_eos_samples: 10000       # Number of final posterior samples
+  n_eos_samples: 10000       # Final posterior draws / EOS samples
   log_prob_batch_size: 1000  # Batch size for log-probability evaluation
 
   n_particles: 10000         # Number of SMC particles
@@ -713,6 +713,13 @@ sampler:
 - **`n_mcmc_steps`** (`int`, default: `1`) - MCMC rejuvenation steps per tempering stage
 - **`target_ess`** (`float`, default: `0.9`) - Target ESS fraction for adaptive tempering (0.0–1.0)
 - **`random_walk_sigma`** (`float`, default: `1.0`) - Step size for Gaussian random walk kernel
+
+When `n_eos_samples` exceeds `n_particles`, SMC first completes normally and keeps
+its evidence estimate unchanged. It then runs posterior MCMC chains initialized
+from the final resampled particles, using `n_mcmc_steps` transitions per extra
+draw, until there are `n_eos_samples` final draws. Post-sampling processes no more
+than `log_prob_batch_size` chains at once, but the final result still stores all
+requested samples.
 
 **Output:**
 - Posterior samples with equal weights
@@ -821,7 +828,7 @@ This sampler is experimental and may produce unstable results, use at own risk. 
 sampler:
   type: "smc-nuts"              # Sampler type identifier (EXPERIMENTAL)
   output_dir: "./outdir/"       # Output directory for results
-  n_eos_samples: 10000          # Number of final posterior samples
+  n_eos_samples: 10000          # Final posterior draws / EOS samples
   log_prob_batch_size: 1000     # Batch size for log-probability evaluation
 
   n_particles: 10000            # Number of SMC particles
@@ -853,6 +860,10 @@ sampler:
 - When NUTS kernel stability can be verified
 
 **Warning:** This sampler is experimental. Use SMC Random Walk for production analyses.
+
+As with SMC-RW, requesting more `n_eos_samples` than `n_particles` adds posterior
+MCMC draws after the evidence calculation has completed. The evidence is not
+recomputed or modified by this post-sampling stage.
 
 ::::
 

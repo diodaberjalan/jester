@@ -54,7 +54,7 @@ Before sampling begins, `jester` runs a quick sanity check: it draws three prior
 
 ## 8. EOS quantity generation
 
-After sampling, a subset of posterior samples (controlled by `n_eos_samples`) is passed back through the transform to compute derived EOS quantities: the density grid, pressure, energy density, speed of sound, and the full mass–radius–tidal deformability family. These are added to the result object alongside the raw posterior samples.
+After sampling, a subset of posterior samples (controlled by `n_eos_samples`) is passed back through the transform to compute derived EOS quantities: the density grid, pressure, energy density, speed of sound, and the full mass–radius–tidal deformability family. These are added to the result object alongside the raw posterior samples. For SMC samplers, requesting more EOS samples than particles triggers a final-temperature post-sampling MCMC stage; this adds posterior draws without changing the completed evidence estimate.
 
 This step re-runs the TOV solver in batches (batch size set by `log_prob_batch_size`), so it is the most expensive post-sampling operation. The batch size can be tuned to fit available memory.
 
