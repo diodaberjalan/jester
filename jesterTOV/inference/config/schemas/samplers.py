@@ -168,6 +168,15 @@ class SMCRandomWalkSamplerConfig(BaseSamplerConfig):
         Fixed sigma scaling for Gaussian random walk kernel (default: 1.0).
         The proposal covariance is computed from particles and scaled by sigma^2.
         Default of 1.0 uses the empirical covariance directly.
+    post_mcmc_adapt_steps : int
+        Number of discarded post-SMC random-walk warm-up transitions used to tune
+        one global proposal scale (default: 0, which disables adaptation).
+    post_mcmc_target_acceptance : float
+        Acceptance probability targeted during post-SMC warm-up (default: 0.3).
+    post_mcmc_adaptation_rate : float
+        Initial Robbins--Monro update rate for post-SMC warm-up (default: 0.2).
+    post_mcmc_sigma_min, post_mcmc_sigma_max : float
+        Bounds on the frozen post-SMC proposal scale (defaults: 0.01, 2.0).
     """
 
     type: Literal["smc-rw"] = "smc-rw"
@@ -175,6 +184,11 @@ class SMCRandomWalkSamplerConfig(BaseSamplerConfig):
     n_mcmc_steps: int = 1
     target_ess: float = 0.9
     random_walk_sigma: float = 1.0
+    post_mcmc_adapt_steps: int = 0
+    post_mcmc_target_acceptance: float = 0.3
+    post_mcmc_adaptation_rate: float = 0.2
+    post_mcmc_sigma_min: float = 0.01
+    post_mcmc_sigma_max: float = 2.0
 
     @field_validator("n_particles", "n_mcmc_steps")
     @classmethod
@@ -183,19 +197,37 @@ class SMCRandomWalkSamplerConfig(BaseSamplerConfig):
             raise ValueError(f"Value must be positive, got: {v}")
         return v
 
-    @field_validator("target_ess")
+    @field_validator("post_mcmc_adapt_steps")
+    @classmethod
+    def _validate_nonnegative(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError(f"Value must be non-negative, got: {v}")
+        return v
+
+    @field_validator("target_ess", "post_mcmc_target_acceptance")
     @classmethod
     def _validate_fraction(cls, v: float) -> float:
         if v <= 0 or v > 1:
             raise ValueError(f"Value must be in (0, 1], got: {v}")
         return v
 
-    @field_validator("random_walk_sigma")
+    @field_validator(
+        "random_walk_sigma",
+        "post_mcmc_adaptation_rate",
+        "post_mcmc_sigma_min",
+        "post_mcmc_sigma_max",
+    )
     @classmethod
     def _validate_positive_float(cls, v: float) -> float:
         if v <= 0:
             raise ValueError(f"Value must be positive, got: {v}")
         return v
+
+    def model_post_init(self, __context: object) -> None:
+        if self.post_mcmc_sigma_min >= self.post_mcmc_sigma_max:
+            raise ValueError(
+                "post_mcmc_sigma_min must be smaller than post_mcmc_sigma_max"
+            )
 
 
 class SMCNUTSSamplerConfig(BaseSamplerConfig):

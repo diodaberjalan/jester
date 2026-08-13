@@ -918,6 +918,52 @@ class TestBlackJAXSMCNUTSSampler:
             baseline_sampler.metadata["logZ"]
         )
 
+    @pytest.mark.slow
+    def test_smc_post_sampling_adapts_and_freezes_random_walk_scale(self):
+        """Post-SMC adaptation records a bounded, frozen proposal scale."""
+        from jesterTOV.inference.config.schema import SMCRandomWalkSamplerConfig
+        from jesterTOV.inference.samplers.blackjax.smc.random_walk import (
+            BlackJAXSMCRandomWalkSampler,
+        )
+
+        config = SMCRandomWalkSamplerConfig(
+            n_particles=20,
+            n_mcmc_steps=1,
+            target_ess=0.8,
+            random_walk_sigma=0.1,
+            n_eos_samples=35,
+            log_prob_batch_size=7,
+            post_mcmc_adapt_steps=3,
+            post_mcmc_target_acceptance=0.3,
+            post_mcmc_adaptation_rate=0.2,
+            post_mcmc_sigma_min=0.05,
+            post_mcmc_sigma_max=0.5,
+            output_dir="./test_output/",
+        )
+        sampler = BlackJAXSMCRandomWalkSampler(
+            MockLikelihood(), UniformPrior(0.0, 1.0, parameter_names=["x"]), [], [], config
+        )
+        sampler.sample(jax.random.PRNGKey(321))
+
+        metadata = sampler.metadata
+        assert sampler.get_n_samples() == 35
+        assert metadata["post_mcmc_adapt_steps"] == 3
+        assert metadata["post_mcmc_initial_sigma"] == pytest.approx(0.1)
+        assert 0.0 <= metadata["post_mcmc_mean_acceptance"] <= 1.0
+        assert 0.05 <= metadata["post_mcmc_final_sigma"] <= 0.5
+        assert metadata["smc_setup_time_seconds"] >= 0.0
+        assert metadata["smc_tempering_time_seconds"] > 0.0
+        assert metadata["post_mcmc_adaptation_time_seconds"] > 0.0
+        assert metadata["post_mcmc_extension_time_seconds"] > 0.0
+        assert metadata["post_mcmc_total_time_seconds"] >= metadata[
+            "post_mcmc_adaptation_time_seconds"
+        ]
+        assert metadata["smc_tempering_loglikelihood_evaluations"] == (
+            20 * metadata["annealing_steps"] * 4
+        )
+        assert metadata["post_mcmc_adaptation_loglikelihood_evaluations"] == 20 * 4
+        assert metadata["post_mcmc_extension_loglikelihood_evaluations"] == 15 * 2
+
 
 class TestBlackJAXNSAWSampler:
     """Test BlackJAX Nested Sampling with Acceptance Walk sampler."""

@@ -263,10 +263,25 @@ class BlackjaxSMCSampler(BlackjaxSampler):
         if self._particles_flat is None:
             raise RuntimeError("No final SMC particles available for post-sampling")
 
+        self._post_sample_diagnostics = {
+            "post_mcmc_adapt_steps": 0,
+            "post_mcmc_target_acceptance": 0.0,
+            "post_mcmc_mean_acceptance": 0.0,
+            "post_mcmc_initial_sigma": 0.0,
+            "post_mcmc_final_sigma": 0.0,
+            "post_mcmc_adaptation_time_seconds": 0.0,
+            "post_mcmc_extension_time_seconds": 0.0,
+            "post_mcmc_total_time_seconds": 0.0,
+            "post_mcmc_adaptation_loglikelihood_evaluations": 0,
+            "post_mcmc_extension_loglikelihood_evaluations": 0,
+        }
+
         n_initial = len(self._particles_flat)
         n_extra = max(0, self.config.n_eos_samples - n_initial)
         if n_extra == 0:
             return 0
+
+        post_sample_start_time = time.perf_counter()
 
         logger.info(
             "Post-sampling %d additional posterior draws with %s MCMC "
@@ -286,6 +301,104 @@ class BlackjaxSMCSampler(BlackjaxSampler):
         )
 
         current_particles = self._particles_flat
+
+        # A post-SMC extension should add useful posterior draws rather than
+        # many nearly identical descendants.  For the random-walk kernel, use
+        # a short, discarded warm-up to tune its one global scale from the
+        # terminal particle cloud, then freeze the proposal before retaining
+        # any samples.  The covariance shape remains the SMC covariance.
+        if (
+            isinstance(self.config, SMCRandomWalkSamplerConfig)
+            and self.config.post_mcmc_adapt_steps > 0
+        ):
+            config = self.config
+            initial_sigma = config.random_walk_sigma
+            base_cov = init_params["cov"] / initial_sigma**2
+            states = jax.vmap(mcmc_init_fn, in_axes=(0, None))(
+                current_particles, logposterior_fn
+            )
+            log_sigma_min = jnp.log(config.post_mcmc_sigma_min)
+            log_sigma_max = jnp.log(config.post_mcmc_sigma_max)
+
+            def adapt_transition(
+                iteration: int, carry: tuple[Any, PRNGKeyArray, Array, Array]
+            ) -> tuple[Any, PRNGKeyArray, Array, Array]:
+                states, transition_key, log_sigma, acceptance_sum = carry
+                transition_key, step_key = jax.random.split(transition_key)
+                chain_keys = jax.random.split(step_key, n_initial)
+                cov = base_cov * jnp.exp(2.0 * log_sigma)
+                next_states, infos = jax.vmap(
+                    lambda rng_key, state: mcmc_step_fn(
+                        rng_key, state, logposterior_fn, cov=cov
+                    )
+                )(chain_keys, states)
+                mean_acceptance = jnp.mean(infos.acceptance_rate)
+                learning_rate = config.post_mcmc_adaptation_rate / jnp.sqrt(
+                    iteration + 1.0
+                )
+                next_log_sigma = jnp.clip(
+                    log_sigma
+                    + learning_rate
+                    * (mean_acceptance - config.post_mcmc_target_acceptance),
+                    log_sigma_min,
+                    log_sigma_max,
+                )
+                return (
+                    next_states,
+                    transition_key,
+                    next_log_sigma,
+                    acceptance_sum + mean_acceptance,
+                )
+
+            logger.info(
+                "Adapting post-MCMC random-walk scale for %d warm-up steps "
+                "(target acceptance %.2f).",
+                config.post_mcmc_adapt_steps,
+                config.post_mcmc_target_acceptance,
+            )
+            adaptation_start_time = time.perf_counter()
+            states, key, final_log_sigma, acceptance_sum = jax.lax.fori_loop(
+                0,
+                config.post_mcmc_adapt_steps,
+                adapt_transition,
+                (
+                    states,
+                    key,
+                    jnp.log(initial_sigma),
+                    jnp.array(0.0),
+                ),
+            )
+            jax.block_until_ready(states.position)
+            adaptation_end_time = time.perf_counter()
+            current_particles = states.position
+            final_sigma = float(jnp.exp(final_log_sigma))
+            init_params = {**init_params, "cov": base_cov * final_sigma**2}
+            self._post_sample_diagnostics = {
+                "post_mcmc_adapt_steps": config.post_mcmc_adapt_steps,
+                "post_mcmc_target_acceptance": config.post_mcmc_target_acceptance,
+                "post_mcmc_mean_acceptance": float(
+                    acceptance_sum / config.post_mcmc_adapt_steps
+                ),
+                "post_mcmc_initial_sigma": initial_sigma,
+                "post_mcmc_final_sigma": final_sigma,
+                "post_mcmc_adaptation_time_seconds": (
+                    adaptation_end_time - adaptation_start_time
+                ),
+                "post_mcmc_extension_time_seconds": 0.0,
+                "post_mcmc_total_time_seconds": 0.0,
+                # RW initialization evaluates the posterior once per particle;
+                # each subsequent transition evaluates one proposal per particle.
+                "post_mcmc_adaptation_loglikelihood_evaluations": (
+                    n_initial * (config.post_mcmc_adapt_steps + 1)
+                ),
+                "post_mcmc_extension_loglikelihood_evaluations": 0,
+            }
+            logger.info(
+                "Post-MCMC warm-up complete: acceptance %.1f%%, sigma %.4f -> %.4f.",
+                100.0 * self._post_sample_diagnostics["post_mcmc_mean_acceptance"],
+                initial_sigma,
+                final_sigma,
+            )
         n_dim = current_particles.shape[1]
         n_total = n_initial + n_extra
 
@@ -298,6 +411,7 @@ class BlackjaxSMCSampler(BlackjaxSampler):
         output_offset = n_initial
         chain_offset = 0
         max_chains = min(n_initial, self.config.log_prob_batch_size)
+        extension_start_time = time.perf_counter()
 
         while n_remaining > 0:
             n_chains = min(max_chains, n_remaining)
@@ -343,8 +457,21 @@ class BlackjaxSMCSampler(BlackjaxSampler):
             output_offset += n_chains
             chain_offset = (chain_offset + n_chains) % n_initial
 
+        jax.block_until_ready(final_particles)
+        extension_end_time = time.perf_counter()
         self._particles_flat = final_particles
         self._weights = jnp.ones(n_total) / n_total
+        self._post_sample_diagnostics["post_mcmc_extension_time_seconds"] = (
+            extension_end_time - extension_start_time
+        )
+        self._post_sample_diagnostics["post_mcmc_total_time_seconds"] = (
+            extension_end_time - post_sample_start_time
+        )
+        # Every retained extension draw initializes a RW state once and applies
+        # ``n_mcmc_steps`` proposal transitions, each needing one likelihood.
+        self._post_sample_diagnostics[
+            "post_mcmc_extension_loglikelihood_evaluations"
+        ] = n_extra * (self.config.n_mcmc_steps + 1)
         logger.info("Post-sampling complete: %d final posterior draws", n_total)
         return n_extra
 
@@ -361,7 +488,7 @@ class BlackjaxSMCSampler(BlackjaxSampler):
         Initial particles are sampled from the prior internally.
         """
         logger.info(f"Starting SMC sampling with {self._get_kernel_name()} kernel...")
-        start_time = time.time()
+        start_time = time.perf_counter()
 
         # Sample initial particles from prior
         key, subkey = jax.random.split(key)
@@ -449,7 +576,7 @@ class BlackjaxSMCSampler(BlackjaxSampler):
             bar = "█" * filled + "░" * (bar_length - filled)
 
             # Compute elapsed time
-            elapsed = time.time() - start_time
+            elapsed = time.perf_counter() - start_time
             hours, remainder = divmod(int(elapsed), 3600)
             minutes, seconds = divmod(remainder, 60)
             elapsed_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
@@ -585,7 +712,8 @@ class BlackjaxSMCSampler(BlackjaxSampler):
         )
 
         logger.info("Running SMC loop (this may take several minutes)...")
-        loop_start_time = time.time()
+        jax.block_until_ready(state)
+        loop_start_time = time.perf_counter()
 
         (
             state,
@@ -600,9 +728,9 @@ class BlackjaxSMCSampler(BlackjaxSampler):
             cond_fn, body_fn, init_carry  # type: ignore[arg-type]
         )
 
-        loop_end_time = time.time()
+        jax.block_until_ready(state)
+        loop_end_time = time.perf_counter()
         steps = int(steps)
-        end_time = time.time()
 
         # Extract final particles
         # Cast to proper type for type checker (runtime type is correct)
@@ -626,6 +754,7 @@ class BlackjaxSMCSampler(BlackjaxSampler):
         post_sample_count = self._post_sample(
             key, logprior_fn, loglikelihood_fn, logposterior_fn
         )
+        end_time = time.perf_counter()
 
         # Compute summary statistics
         mean_ess = float(jnp.mean(ess_history[:steps]))
@@ -654,7 +783,18 @@ class BlackjaxSMCSampler(BlackjaxSampler):
             "post_sample_mcmc_steps": (
                 self.config.n_mcmc_steps if post_sample_count > 0 else 0
             ),
+            # At each tempering transition: N evaluations determine the next
+            # temperature, N initialize the RW states, N*n_mcmc_steps evaluate
+            # proposals, and N form the new importance weights.
+            "smc_tempering_loglikelihood_evaluations": (
+                self.config.n_particles
+                * steps
+                * (self.config.n_mcmc_steps + 3)
+            ),
+            **self._post_sample_diagnostics,
             "sampling_time_seconds": end_time - start_time,
+            "smc_setup_time_seconds": loop_start_time - start_time,
+            "smc_tempering_time_seconds": loop_end_time - loop_start_time,
             "loop_time_seconds": loop_end_time - loop_start_time,
             "tempering_param_history": tempering_param_history[:steps].tolist(),
             "ess_history": ess_history[:steps].tolist(),
@@ -824,6 +964,18 @@ class BlackjaxSMCSampler(BlackjaxSampler):
             batch_size=self.config.log_prob_batch_size,
         )
         logger.info(f"Computed {len(log_probs)} log probability values")
+        # This is outside ``sample`` but part of producing the saved inference
+        # result: one posterior (and therefore likelihood) evaluation per draw.
+        self.metadata["output_loglikelihood_evaluations"] = len(log_probs)
+        self.metadata["sampling_loglikelihood_evaluations"] = (
+            self.metadata["smc_tempering_loglikelihood_evaluations"]
+            + self.metadata["post_mcmc_adaptation_loglikelihood_evaluations"]
+            + self.metadata["post_mcmc_extension_loglikelihood_evaluations"]
+        )
+        self.metadata["total_loglikelihood_evaluations"] = (
+            self.metadata["sampling_loglikelihood_evaluations"]
+            + self.metadata["output_loglikelihood_evaluations"]
+        )
 
         return log_probs
 

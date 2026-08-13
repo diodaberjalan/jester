@@ -235,6 +235,58 @@ class InferenceResult:
                     "post_sample_mcmc_steps": int(
                         smc_metadata["post_sample_mcmc_steps"]
                     ),
+                    "post_mcmc_adapt_steps": int(
+                        smc_metadata.get("post_mcmc_adapt_steps", 0)
+                    ),
+                    "post_mcmc_target_acceptance": float(
+                        smc_metadata.get("post_mcmc_target_acceptance", 0.0)
+                    ),
+                    "post_mcmc_mean_acceptance": float(
+                        smc_metadata.get("post_mcmc_mean_acceptance", 0.0)
+                    ),
+                    "post_mcmc_initial_sigma": float(
+                        smc_metadata.get("post_mcmc_initial_sigma", 0.0)
+                    ),
+                    "post_mcmc_final_sigma": float(
+                        smc_metadata.get("post_mcmc_final_sigma", 0.0)
+                    ),
+                    "smc_setup_time_seconds": float(
+                        smc_metadata.get("smc_setup_time_seconds", 0.0)
+                    ),
+                    "smc_tempering_time_seconds": float(
+                        smc_metadata.get("smc_tempering_time_seconds", 0.0)
+                    ),
+                    "post_mcmc_adaptation_time_seconds": float(
+                        smc_metadata.get("post_mcmc_adaptation_time_seconds", 0.0)
+                    ),
+                    "post_mcmc_extension_time_seconds": float(
+                        smc_metadata.get("post_mcmc_extension_time_seconds", 0.0)
+                    ),
+                    "post_mcmc_total_time_seconds": float(
+                        smc_metadata.get("post_mcmc_total_time_seconds", 0.0)
+                    ),
+                    "smc_tempering_loglikelihood_evaluations": int(
+                        smc_metadata.get("smc_tempering_loglikelihood_evaluations", 0)
+                    ),
+                    "post_mcmc_adaptation_loglikelihood_evaluations": int(
+                        smc_metadata.get(
+                            "post_mcmc_adaptation_loglikelihood_evaluations", 0
+                        )
+                    ),
+                    "post_mcmc_extension_loglikelihood_evaluations": int(
+                        smc_metadata.get(
+                            "post_mcmc_extension_loglikelihood_evaluations", 0
+                        )
+                    ),
+                    "output_loglikelihood_evaluations": int(
+                        smc_metadata.get("output_loglikelihood_evaluations", 0)
+                    ),
+                    "sampling_loglikelihood_evaluations": int(
+                        smc_metadata.get("sampling_loglikelihood_evaluations", 0)
+                    ),
+                    "total_loglikelihood_evaluations": int(
+                        smc_metadata.get("total_loglikelihood_evaluations", 0)
+                    ),
                 }
             )
 

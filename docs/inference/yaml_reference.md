@@ -705,6 +705,11 @@ sampler:
   n_mcmc_steps: 1            # MCMC steps per tempering stage
   target_ess: 0.9            # Target effective sample size (ESS) fraction
   random_walk_sigma: 1.0     # Gaussian random walk step size
+  post_mcmc_adapt_steps: 0   # Discarded post-SMC RW warm-up (0 = disabled)
+  post_mcmc_target_acceptance: 0.3
+  post_mcmc_adaptation_rate: 0.2
+  post_mcmc_sigma_min: 0.01
+  post_mcmc_sigma_max: 2.0
 ```
 
 **Field Details:**
@@ -713,6 +718,15 @@ sampler:
 - **`n_mcmc_steps`** (`int`, default: `1`) - MCMC rejuvenation steps per tempering stage
 - **`target_ess`** (`float`, default: `0.9`) - Target ESS fraction for adaptive tempering (0.0–1.0)
 - **`random_walk_sigma`** (`float`, default: `1.0`) - Step size for Gaussian random walk kernel
+- **`post_mcmc_adapt_steps`** (`int`, default: `0`) - Discarded random-walk
+  warm-up transitions for tuning the global post-SMC scale; zero preserves the
+  previous fixed-scale behavior
+- **`post_mcmc_target_acceptance`** (`float`, default: `0.3`) - Target acceptance
+  during that warm-up
+- **`post_mcmc_adaptation_rate`** (`float`, default: `0.2`) - Initial
+  diminishing adaptation rate
+- **`post_mcmc_sigma_min`**, **`post_mcmc_sigma_max`** (`float`, defaults:
+  `0.01`, `2.0`) - Bounds on the scale that is frozen before retaining samples
 
 When `n_eos_samples` exceeds `n_particles`, SMC first completes normally and keeps
 its evidence estimate unchanged. It then runs posterior MCMC chains initialized
@@ -720,6 +734,11 @@ from the final resampled particles, using `n_mcmc_steps` transitions per extra
 draw, until there are `n_eos_samples` final draws. Post-sampling processes no more
 than `log_prob_batch_size` chains at once, but the final result still stores all
 requested samples.
+
+For `smc-rw`, optional post-SMC adaptation tunes only one global multiplier of
+the final particle covariance. Its warm-up samples are discarded and the tuned
+scale is frozen before retained draws are generated, so it does not change the
+SMC evidence estimate or use parameter-dependent tuning.
 
 **Output:**
 - Posterior samples with equal weights

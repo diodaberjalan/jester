@@ -1,3 +1,4 @@
 *.npz
 outdir/
 outdir_*/
+spectral_reparam/particle_sweep_radio_20260811/
