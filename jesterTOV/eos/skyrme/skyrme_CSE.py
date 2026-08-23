@@ -219,11 +219,21 @@ class Skyrme_with_CSE_EOS_model(Interpolate_EOS_model):
         p_skyrme_full = p_skyrme_full / utils.MeV_fm_inv3_to_geometric
         e_skyrme_full = e_skyrme_full / utils.MeV_fm_inv3_to_geometric
 
-        # Re-interpolate to a fixed-size array up to nbreak
-        # This maintains JAX compatibility while allowing variable nbreak
-        n_skyrme = jnp.linspace(
-            n_skyrme_full[0], nbreak, self.ndat_skyrme, endpoint=True
+        # Preserve the native bare-Skyrme nodes below nbreak.  Replacing this
+        # segment with a new linspace changes the crust/outer-core
+        # interpolation and can alter the low-mass M--R branch even though the
+        # CSE extension starts above it.  Pack only the fixed-shape slots above
+        # the break so the construction remains JAX-jittable.
+        above_break = n_skyrme_full >= nbreak
+        n_tail = jnp.sum(above_break)
+        tail_rank = jnp.cumsum(above_break)
+        last_native_n = jnp.max(
+            jnp.where(above_break, n_skyrme_full[0], n_skyrme_full)
         )
+        packed_tail = last_native_n + (
+            tail_rank / jnp.maximum(n_tail, 1)
+        ) * (nbreak - last_native_n)
+        n_skyrme = jnp.where(above_break, packed_tail, n_skyrme_full)
         p_skyrme = jnp.interp(n_skyrme, n_skyrme_full, p_skyrme_full)
         e_skyrme = jnp.interp(n_skyrme, n_skyrme_full, e_skyrme_full)
         mu_skyrme = jnp.interp(n_skyrme, n_skyrme_full, mu_skyrme_full)
@@ -249,14 +259,15 @@ class Skyrme_with_CSE_EOS_model(Interpolate_EOS_model):
         p_CSE = p_break + utils.cumtrapz(cs2_CSE * mu_CSE, n_CSE) + 1e-6
         e_CSE = e_break + utils.cumtrapz(mu_CSE, n_CSE) + 1e-6
 
-        # Combine skyrme and CSE data
-        n = jnp.concatenate((n_skyrme, n_CSE))
-        p = jnp.concatenate((p_skyrme, p_CSE))
-        e = jnp.concatenate((e_skyrme, e_CSE))
+        # The packed Skyrme segment ends at nbreak; skip the duplicate first
+        # CSE node when joining the monotonic tables.
+        n = jnp.concatenate((n_skyrme, n_CSE[1:]))
+        p = jnp.concatenate((p_skyrme, p_CSE[1:]))
+        e = jnp.concatenate((e_skyrme, e_CSE[1:]))
 
         # TODO: let's decide whether we want to save cs2 and mu or just use them for computation and then discard them.
-        mu = jnp.concatenate((mu_skyrme, mu_CSE))
-        cs2 = jnp.concatenate((cs2_skyrme, cs2_CSE))
+        mu = jnp.concatenate((mu_skyrme, mu_CSE[1:]))
+        cs2 = jnp.concatenate((cs2_skyrme, cs2_CSE[1:]))
 
         ns, ps, hs, es, dloge_dlogps = self.interpolate_eos(n, p, e)
 
