@@ -284,11 +284,26 @@ class Skyrme_with_AdaptiveCSE_EOS_model(Interpolate_EOS_model):
             ngrids_local = ngrids
 
         # ----------------------------------------------------------------
-        # 4.  Interpolate Skyrme up to nbreak
+        # 4.  Keep the native Skyrme table below nbreak
         # ----------------------------------------------------------------
-        n_skyrme = jnp.linspace(
-            n_skyrme_full[0], nbreak, self.ndat_skyrme, endpoint=True
+        # Do not replace the low-density part with a fresh linspace to the
+        # adaptive break.  The bare Skyrme EOS is tabulated on
+        # ``n_skyrme_full``; changing its nodes changes the interpolation of
+        # p(e) in the crust/outer-core region and therefore the low-mass M--R
+        # branch, even when the CSE transition is far above the star's central
+        # density.  Preserve every native node below the break.  The remaining
+        # fixed-shape slots are packed between the last native node and nbreak
+        # so this remains JAX-jittable for a sample-dependent break.
+        above_break = n_skyrme_full >= nbreak
+        n_tail = jnp.sum(above_break)
+        tail_rank = jnp.cumsum(above_break)
+        last_native_n = jnp.max(
+            jnp.where(above_break, n_skyrme_full[0], n_skyrme_full)
         )
+        packed_tail = last_native_n + (
+            tail_rank / jnp.maximum(n_tail, 1)
+        ) * (nbreak - last_native_n)
+        n_skyrme = jnp.where(above_break, packed_tail, n_skyrme_full)
         p_skyrme = jnp.interp(n_skyrme, n_skyrme_full, p_skyrme_full)
         e_skyrme = jnp.interp(n_skyrme, n_skyrme_full, e_skyrme_full)
         mu_skyrme = jnp.interp(n_skyrme, n_skyrme_full, mu_skyrme_full)
@@ -321,12 +336,14 @@ class Skyrme_with_AdaptiveCSE_EOS_model(Interpolate_EOS_model):
         # ----------------------------------------------------------------
         # 6.  Combine and build final EOSData
         # ----------------------------------------------------------------
-        n = jnp.concatenate((n_skyrme, n_CSE))
-        p = jnp.concatenate((p_skyrme, p_CSE))
-        e = jnp.concatenate((e_skyrme, e_CSE))
+        # The packed Skyrme tail already ends at nbreak, so drop the duplicate
+        # first CSE node when joining the two monotonic tables.
+        n = jnp.concatenate((n_skyrme, n_CSE[1:]))
+        p = jnp.concatenate((p_skyrme, p_CSE[1:]))
+        e = jnp.concatenate((e_skyrme, e_CSE[1:]))
 
-        mu = jnp.concatenate((mu_skyrme, mu_CSE))
-        cs2 = jnp.concatenate((cs2_skyrme, cs2_CSE))
+        mu = jnp.concatenate((mu_skyrme, mu_CSE[1:]))
+        cs2 = jnp.concatenate((cs2_skyrme, cs2_CSE[1:]))
 
         ns, ps, hs, es, dloge_dlogps = self.interpolate_eos(n, p, e)
 
