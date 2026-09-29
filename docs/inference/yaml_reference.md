@@ -605,6 +605,19 @@ This likelihood requires `calculate_durca: true` in the EOS configuration so `n_
 
 ::::
 
+::::{dropdown} **SAX J1808.4-3658-only likelihood**
+
+```yaml
+- type: "sax"
+  enabled: true
+  trigger_assumption: "durca_only"  # or "durca_or_cse" (default: "durca_only")
+  penalty_value: -1e5
+```
+
+This has the same trigger-mass calculation and configuration fields as `direct_urca`, but applies only the SAX J1808.4-3658 Gaussian-mixture upper limit. Use it by itself for a SAX-only dUrca run; do not add `mtrig_lower` unless the HESS lower-bound constraint is also intended. Existing `direct_urca` configurations retain their combined upper-limit likelihood unchanged.
+
+::::
+
 ### Trigger-mass lower-bound likelihood
 
 Evaluate a lower-bound likelihood for $m_{\rm trig}$ from non-rapid-cooling objects. This uses the same direct-Urca/CSE trigger-mass calculation as `direct_urca`, then applies the HESS lower-bound CDF. See {class}`~jesterTOV.inference.likelihoods.direct_urca.MtrigLowerLikelihood` for the full API.

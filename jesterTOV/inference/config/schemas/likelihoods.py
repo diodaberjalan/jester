@@ -993,6 +993,34 @@ class DirectUrcaLikelihoodConfig(BaseLikelihoodConfig):
     )
 
 
+class SAXLikelihoodConfig(DirectUrcaLikelihoodConfig):
+    r"""SAX J1808.4-3658-only trigger-mass likelihood configuration.
+
+    This is the direct-Urca/CSE upper-limit likelihood restricted to the SAX
+    J1808.4-3658 mass distribution.  It deliberately does not include the
+    other rapid-cooling objects used by ``direct_urca`` or the HESS lower
+    bound provided by ``mtrig_lower``.
+
+    Examples
+    --------
+    .. code-block:: yaml
+
+        - type: "sax"
+          enabled: true
+          trigger_assumption: "durca_or_cse"
+          penalty_value: -1e5
+    """
+
+    type: Literal["sax"] = Field(
+        default="sax", description="SAX J1808.4-3658 likelihood type identifier"
+    )
+
+    name: str = Field(
+        default="SAX_J1808_4_3658",
+        description="Identifier for this SAX J1808.4-3658 likelihood constraint",
+    )
+
+
 class MtrigLowerLikelihoodConfig(BaseLikelihoodConfig):
     r"""Trigger-mass lower-bound likelihood configuration.
 
@@ -1115,6 +1143,7 @@ LikelihoodConfig = Annotated[
         REXLikelihoodConfig,
         MaxMassBoundsLikelihoodConfig,
         DirectUrcaLikelihoodConfig,
+        SAXLikelihoodConfig,
         MtrigLowerLikelihoodConfig,
         ZeroLikelihoodConfig,
     ],

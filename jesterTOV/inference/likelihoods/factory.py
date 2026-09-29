@@ -20,6 +20,7 @@ from ..config.schema import (
     ZeroLikelihoodConfig,
     MaxMassBoundsLikelihoodConfig,
     DirectUrcaLikelihoodConfig,
+    SAXLikelihoodConfig,
     MtrigLowerLikelihoodConfig,
 )
 from .combined import CombinedLikelihood, ZeroLikelihood
@@ -27,7 +28,7 @@ from .gw import GWLikelihood, GWLikelihoodResampled
 from .nicer import NICERLikelihood, NICERKDELikelihood
 from .radio import RadioTimingLikelihood, MaxMassBoundsLikelihood
 from .chieft import ChiEFTLikelihood
-from .direct_urca import DirectUrcaLikelihood, MtrigLowerLikelihood
+from .direct_urca import DirectUrcaLikelihood, SAXLikelihood, MtrigLowerLikelihood
 from .constraints import (
     ConstraintEOSLikelihood,
     ConstraintTOVLikelihood,
@@ -207,6 +208,17 @@ def create_likelihood(
                 penalty_value=config.penalty_value,
             )
 
+        case SAXLikelihoodConfig():
+            return SAXLikelihood(
+                trigger_assumption=config.trigger_assumption,
+                name=config.name,
+                penalty_value=config.penalty_value,
+                nstar_min_nsat=config.nstar_min_nsat,
+                nstar_max_nsat=config.nstar_max_nsat,
+                nb_ncool=config.nb_ncool,
+                nb_nstar=config.nb_nstar,
+            )
+
         case DirectUrcaLikelihoodConfig():
             return DirectUrcaLikelihood(
                 trigger_assumption=config.trigger_assumption,
@@ -339,13 +351,13 @@ def create_combined_likelihood(
                     psr_name = pulsar["name"]
                     assert isinstance(psr_name, str), "name must be a string"
                     mass_mean = pulsar["mass_mean"]
-                    assert isinstance(
-                        mass_mean, (int, float)
-                    ), "mass_mean must be a number"
+                    assert isinstance(mass_mean, (int, float)), (
+                        "mass_mean must be a number"
+                    )
                     mass_std = pulsar["mass_std"]
-                    assert isinstance(
-                        mass_std, (int, float)
-                    ), "mass_std must be a number"
+                    assert isinstance(mass_std, (int, float)), (
+                        "mass_std must be a number"
+                    )
 
                     radio_likelihood = RadioTimingLikelihood(
                         psr_name=psr_name,

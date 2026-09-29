@@ -3,6 +3,7 @@
 import pytest
 import jax
 import jax.numpy as jnp
+from jax.scipy.stats import norm
 from unittest.mock import MagicMock, patch
 
 from jesterTOV.inference.config import schema
@@ -27,6 +28,7 @@ from jesterTOV.inference.likelihoods.radio import (
 )
 from jesterTOV.inference.likelihoods.direct_urca import (
     DirectUrcaLikelihood,
+    SAXLikelihood,
     MtrigLowerLikelihood,
 )
 from jesterTOV import utils
@@ -1431,6 +1433,29 @@ class TestDirectUrcaTriggerMassLikelihood:
         likelihood = factory.create_likelihood(config)
 
         assert isinstance(likelihood, DirectUrcaLikelihood)
+        assert likelihood.trigger_assumption == "durca_or_cse"
+        assert likelihood.penalty_value == -123.0
+
+    def test_sax_likelihood_uses_only_the_sax_survival_function(self):
+        likelihood = SAXLikelihood(penalty_value=-1e5)
+        m_trig = jnp.asarray(1.6)
+        z_sax = (m_trig - likelihood.sax_mu) / likelihood.sax_sig
+        expected = jnp.log(1.0 - jnp.sum(likelihood.sax_w * norm.cdf(z_sax)))
+
+        result = likelihood._log_mtrig_likelihood(m_trig, jnp.asarray(2.0))
+
+        assert jnp.allclose(result, expected)
+
+    def test_factory_creates_sax_likelihood(self):
+        config = schema.SAXLikelihoodConfig(
+            trigger_assumption="durca_or_cse",
+            penalty_value=-123.0,
+        )
+
+        likelihood = factory.create_likelihood(config)
+
+        assert isinstance(likelihood, SAXLikelihood)
+        assert likelihood.name == "SAX_J1808_4_3658"
         assert likelihood.trigger_assumption == "durca_or_cse"
         assert likelihood.penalty_value == -123.0
 

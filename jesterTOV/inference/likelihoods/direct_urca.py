@@ -423,6 +423,43 @@ class MtrigUpperLikelihood(DirectUrcaLikelihood):
     """Backward-compatible alias for the playground likelihood name."""
 
 
+class SAXLikelihood(DirectUrcaLikelihood):
+    r"""SAX J1808.4-3658-only upper-limit trigger-mass likelihood.
+
+    This uses the same direct-Urca/CSE trigger-mass calculation as
+    :class:`DirectUrcaLikelihood`, but applies only the SAX J1808.4-3658
+    Gaussian-mixture survival function.  It is intended for runs that should
+    not include the other rapid-cooling upper limits or the HESS lower bound.
+    """
+
+    def __init__(
+        self,
+        trigger_assumption: TriggerAssumption = "durca_only",
+        name: str = "SAX_J1808_4_3658",
+        penalty_value: float = -1e5,
+        nstar_min_nsat: float = 4.0,
+        nstar_max_nsat: float = 10.0,
+        nb_ncool: int = 400,
+        nb_nstar: int = 200,
+    ) -> None:
+        super().__init__(
+            trigger_assumption=trigger_assumption,
+            name=name,
+            penalty_value=penalty_value,
+            nstar_min_nsat=nstar_min_nsat,
+            nstar_max_nsat=nstar_max_nsat,
+            nb_ncool=nb_ncool,
+            nb_nstar=nb_nstar,
+        )
+
+    def _log_mtrig_likelihood(self, m_trig: Float, mtov: Float) -> Float:
+        r"""Evaluate the SAX J1808.4-3658 survival likelihood."""
+        del mtov
+        z_sax = (m_trig[..., None] - self.sax_mu) / self.sax_sig
+        cdf_sax = jnp.sum(self.sax_w * norm.cdf(z_sax), axis=-1)
+        return jnp.log(jnp.maximum(1.0 - cdf_sax, 1e-300))
+
+
 class MtrigLowerLikelihood(DirectUrcaLikelihood):
     r"""Lower-bound likelihood for the direct-Urca or CSE trigger mass.
 
