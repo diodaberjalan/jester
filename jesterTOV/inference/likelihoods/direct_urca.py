@@ -460,6 +460,40 @@ class SAXLikelihood(DirectUrcaLikelihood):
         return jnp.log(jnp.maximum(1.0 - cdf_sax, 1e-300))
 
 
+class SAXRestrictedLikelihood(SAXLikelihood):
+    r"""SAX-only likelihood using the restricted SAX mass mixture.
+
+    The trigger-mass calculation and SAX-only survival-function evaluation are
+    identical to :class:`SAXLikelihood`; only the SAX J1808.4-3658 Gaussian
+    mixture differs.
+    """
+
+    def __init__(
+        self,
+        trigger_assumption: TriggerAssumption = "durca_only",
+        name: str = "SAX_J1808_4_3658_Restricted",
+        penalty_value: float = -1e5,
+        nstar_min_nsat: float = 4.0,
+        nstar_max_nsat: float = 10.0,
+        nb_ncool: int = 400,
+        nb_nstar: int = 200,
+    ) -> None:
+        super().__init__(
+            trigger_assumption=trigger_assumption,
+            name=name,
+            penalty_value=penalty_value,
+            nstar_min_nsat=nstar_min_nsat,
+            nstar_max_nsat=nstar_max_nsat,
+            nb_ncool=nb_ncool,
+            nb_nstar=nb_nstar,
+        )
+
+        # Restricted SAX J1808.4-3658 Gaussian mixture.
+        self.sax_mu = jnp.array([1.82, 1.79, 1.93, 2.00])
+        self.sax_sig = jnp.array([0.065, 0.065, 0.085, 0.060])
+        self.sax_w = jnp.array([0.25, 0.25, 0.25, 0.25])
+
+
 class MtrigLowerLikelihood(DirectUrcaLikelihood):
     r"""Lower-bound likelihood for the direct-Urca or CSE trigger mass.
 

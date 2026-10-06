@@ -29,6 +29,7 @@ from jesterTOV.inference.likelihoods.radio import (
 from jesterTOV.inference.likelihoods.direct_urca import (
     DirectUrcaLikelihood,
     SAXLikelihood,
+    SAXRestrictedLikelihood,
     MtrigLowerLikelihood,
 )
 from jesterTOV import utils
@@ -1456,6 +1457,44 @@ class TestDirectUrcaTriggerMassLikelihood:
 
         assert isinstance(likelihood, SAXLikelihood)
         assert likelihood.name == "SAX_J1808_4_3658"
+        assert likelihood.trigger_assumption == "durca_or_cse"
+        assert likelihood.penalty_value == -123.0
+
+    def test_sax_restricted_uses_requested_gaussian_mixture(self):
+        likelihood = SAXRestrictedLikelihood(penalty_value=-1e5)
+        m_trig = jnp.asarray(1.8)
+
+        assert jnp.array_equal(
+            likelihood.sax_mu, jnp.array([1.82, 1.79, 1.93, 2.00])
+        )
+        assert jnp.array_equal(
+            likelihood.sax_sig, jnp.array([0.065, 0.065, 0.085, 0.060])
+        )
+        assert jnp.array_equal(
+            likelihood.sax_w, jnp.array([0.25, 0.25, 0.25, 0.25])
+        )
+
+        expected = jnp.log(
+            1.0
+            - jnp.sum(
+                likelihood.sax_w
+                * norm.cdf((m_trig - likelihood.sax_mu) / likelihood.sax_sig)
+            )
+        )
+        result = likelihood._log_mtrig_likelihood(m_trig, jnp.asarray(2.0))
+
+        assert jnp.allclose(result, expected)
+
+    def test_factory_creates_sax_restricted_likelihood(self):
+        config = schema.SAXRestrictedLikelihoodConfig(
+            trigger_assumption="durca_or_cse",
+            penalty_value=-123.0,
+        )
+
+        likelihood = factory.create_likelihood(config)
+
+        assert isinstance(likelihood, SAXRestrictedLikelihood)
+        assert likelihood.name == "SAX_J1808_4_3658_Restricted"
         assert likelihood.trigger_assumption == "durca_or_cse"
         assert likelihood.penalty_value == -123.0
 

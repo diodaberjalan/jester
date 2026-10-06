@@ -1021,6 +1021,29 @@ class SAXLikelihoodConfig(DirectUrcaLikelihoodConfig):
     )
 
 
+class SAXRestrictedLikelihoodConfig(SAXLikelihoodConfig):
+    r"""SAX-only trigger-mass likelihood with the restricted mass mixture.
+
+    This has the same direct-Urca/CSE trigger calculation as ``sax``. It
+    differs only in the Gaussian mixture used for the SAX J1808.4-3658 mass
+    distribution.
+    """
+
+    type: Literal["sax_restricted"] = Field(
+        default="sax_restricted",
+        description=(
+            "SAX J1808.4-3658 restricted-mixture likelihood type identifier"
+        ),
+    )
+
+    name: str = Field(
+        default="SAX_J1808_4_3658_Restricted",
+        description=(
+            "Identifier for this restricted SAX J1808.4-3658 likelihood constraint"
+        ),
+    )
+
+
 class MtrigLowerLikelihoodConfig(BaseLikelihoodConfig):
     r"""Trigger-mass lower-bound likelihood configuration.
 
@@ -1144,6 +1167,7 @@ LikelihoodConfig = Annotated[
         MaxMassBoundsLikelihoodConfig,
         DirectUrcaLikelihoodConfig,
         SAXLikelihoodConfig,
+        SAXRestrictedLikelihoodConfig,
         MtrigLowerLikelihoodConfig,
         ZeroLikelihoodConfig,
     ],

@@ -618,6 +618,19 @@ This has the same trigger-mass calculation and configuration fields as `direct_u
 
 ::::
 
+::::{dropdown} **Restricted SAX J1808.4-3658-only likelihood**
+
+```yaml
+- type: "sax_restricted"
+  enabled: true
+  trigger_assumption: "durca_only"  # or "durca_or_cse" (default: "durca_only")
+  penalty_value: -1e5
+```
+
+This has the same SAX-only trigger-mass calculation and configuration fields as `sax`. It differs only in the SAX Gaussian mixture: means `[1.82, 1.79, 1.93, 2.00]` $M_\odot$, standard deviations `[0.065, 0.065, 0.085, 0.060]` $M_\odot$, and equal weights.
+
+::::
+
 ### Trigger-mass lower-bound likelihood
 
 Evaluate a lower-bound likelihood for $m_{\rm trig}$ from non-rapid-cooling objects. This uses the same direct-Urca/CSE trigger-mass calculation as `direct_urca`, then applies the HESS lower-bound CDF. See {class}`~jesterTOV.inference.likelihoods.direct_urca.MtrigLowerLikelihood` for the full API.

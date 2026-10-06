@@ -21,6 +21,7 @@ from ..config.schema import (
     MaxMassBoundsLikelihoodConfig,
     DirectUrcaLikelihoodConfig,
     SAXLikelihoodConfig,
+    SAXRestrictedLikelihoodConfig,
     MtrigLowerLikelihoodConfig,
 )
 from .combined import CombinedLikelihood, ZeroLikelihood
@@ -28,7 +29,12 @@ from .gw import GWLikelihood, GWLikelihoodResampled
 from .nicer import NICERLikelihood, NICERKDELikelihood
 from .radio import RadioTimingLikelihood, MaxMassBoundsLikelihood
 from .chieft import ChiEFTLikelihood
-from .direct_urca import DirectUrcaLikelihood, SAXLikelihood, MtrigLowerLikelihood
+from .direct_urca import (
+    DirectUrcaLikelihood,
+    SAXLikelihood,
+    SAXRestrictedLikelihood,
+    MtrigLowerLikelihood,
+)
 from .constraints import (
     ConstraintEOSLikelihood,
     ConstraintTOVLikelihood,
@@ -206,6 +212,17 @@ def create_likelihood(
                 upper_std=config.upper_std,
                 m_min=config.m_min,
                 penalty_value=config.penalty_value,
+            )
+
+        case SAXRestrictedLikelihoodConfig():
+            return SAXRestrictedLikelihood(
+                trigger_assumption=config.trigger_assumption,
+                name=config.name,
+                penalty_value=config.penalty_value,
+                nstar_min_nsat=config.nstar_min_nsat,
+                nstar_max_nsat=config.nstar_max_nsat,
+                nb_ncool=config.nb_ncool,
+                nb_nstar=config.nb_nstar,
             )
 
         case SAXLikelihoodConfig():
