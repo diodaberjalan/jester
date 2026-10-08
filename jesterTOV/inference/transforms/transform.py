@@ -397,7 +397,33 @@ class JesterTransform(NtoMTransform):
         n_TOV = jnp.interp(pc_TOV, eos_data.ps, eos_data.ns)
         result["n_TOV"] = jnp.nan_to_num(n_TOV, nan=0.0, posinf=0.0, neginf=0.0)
 
+        # Include any solver-specific family observables.  For example, the
+        # scalar--tensor solver supplies its scalar charge and three scalar
+        # tidal deformabilities here.  Keeping this generic means a future
+        # solver need only declare its extra keys and provide FamilyData.extra.
+        if family_data.extra is not None:
+            result.update(
+                {
+                    key: jnp.nan_to_num(value, nan=0.0, posinf=0.0, neginf=0.0)
+                    for key, value in family_data.extra.items()
+                }
+            )
+
         return result
+
+    def get_derived_eos_keys(self) -> set[str]:
+        """Return all posterior-predictive quantities produced by this transform."""
+        return {
+            "masses_EOS",
+            "radii_EOS",
+            "Lambdas_EOS",
+            "n",
+            "p",
+            "e",
+            "cs2",
+            "n_TOV",
+            *self.tov_solver.get_family_extra_keys(),
+        }
 
     def _create_return_dict(
         self,

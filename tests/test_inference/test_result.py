@@ -3,6 +3,7 @@
 import pytest
 import numpy as np
 import json
+import h5py
 from datetime import datetime
 
 from jesterTOV.inference.result import InferenceResult
@@ -331,6 +332,33 @@ class TestInferenceResultAddDerivedEOS:
         np.testing.assert_array_equal(
             result.posterior["masses_EOS"], np.array([[1.4, 1.6, 1.8], [1.5, 1.7, 1.9]])
         )
+
+    def test_scalar_tensor_derived_eos_saved_in_derived_group(self, temp_dir):
+        """Scalar--tensor family observables survive an HDF5 round trip."""
+        scalar_tensor_eos = {
+            "lambda_S": np.array([[1.0, 2.0], [3.0, 4.0]]),
+            "lambda_ST1": np.array([[5.0, 6.0], [7.0, 8.0]]),
+            "lambda_ST2": np.array([[9.0, 10.0], [11.0, 12.0]]),
+            "q": np.array([[0.01, 0.02], [0.03, 0.04]]),
+        }
+        result = InferenceResult(
+            sampler_type="flowmc",
+            posterior={"beta_ST": np.array([-10.0, -12.0]), "log_prob": np.array([-1.0, -2.0])},
+            metadata={"sampler": "flowmc"},
+        )
+        result.add_derived_eos(scalar_tensor_eos)
+
+        filepath = temp_dir / "scalar_tensor_results.h5"
+        result.save(filepath)
+
+        with h5py.File(filepath, "r") as results_file:
+            derived = results_file["posterior/derived_eos"]
+            assert set(scalar_tensor_eos).issubset(derived.keys())
+            assert "q" not in results_file["posterior/parameters"]
+
+        loaded = InferenceResult.load(filepath)
+        for key, value in scalar_tensor_eos.items():
+            np.testing.assert_array_equal(loaded.posterior[key], value)
 
 
 class TestInferenceResultConfigProperty:

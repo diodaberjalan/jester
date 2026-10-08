@@ -23,6 +23,19 @@ SamplerType = Literal[
     "flowmc", "blackjax_smc_rw", "blackjax_smc_nuts", "blackjax_ns_aw"
 ]
 
+STANDARD_DERIVED_EOS_KEYS = frozenset(
+    {
+        "masses_EOS",
+        "radii_EOS",
+        "Lambdas_EOS",
+        "n",
+        "p",
+        "e",
+        "cs2",
+        "n_TOV",
+    }
+)
+
 
 class InferenceResult:
     """Unified HDF5-based storage for JESTER inference results.
@@ -89,6 +102,11 @@ class InferenceResult:
         self.histories = histories
         self.fixed_params: Dict[str, float] = (
             fixed_params if fixed_params is not None else {}
+        )
+        # Solver-specific derived quantities are registered by add_derived_eos.
+        # The standard fields are recognized for backwards-compatible results.
+        self._derived_eos_keys = set(self.posterior).intersection(
+            STANDARD_DERIVED_EOS_KEYS
         )
 
     @classmethod
@@ -360,6 +378,7 @@ class InferenceResult:
         # Convert JAX arrays to NumPy and add to posterior
         for key, value in eos_dict.items():
             self.posterior[key] = np.array(value)
+            self._derived_eos_keys.add(key)
 
         logger.info(f"Added {len(eos_dict)} derived EOS quantities")
 
@@ -417,6 +436,7 @@ class InferenceResult:
             )
 
         # Extract parameter samples (exclude metadata and sampler-specific fields)
+        derived_eos_keys = transform.get_derived_eos_keys()
         exclude_keys = {
             "log_prob",
             "log_prob_full",
@@ -429,15 +449,8 @@ class InferenceResult:
             "logL_birth",
             "logL_birth_full",
             "_sampler_specific",
-            "masses_EOS",
-            "radii_EOS",
-            "Lambdas_EOS",
-            "n",
-            "p",
-            "e",
-            "cs2",
-            "n_TOV",
         }
+        exclude_keys.update(derived_eos_keys)
         param_samples = {
             k: v for k, v in self.posterior.items() if k not in exclude_keys
         }
@@ -479,17 +492,11 @@ class InferenceResult:
 
         # Add transformed outputs to posterior (EOS quantities only, not input parameters)
         # Filter out input parameters from transformed_samples to avoid overwriting full posterior arrays
-        eos_keys = {
-            "masses_EOS",
-            "radii_EOS",
-            "Lambdas_EOS",
-            "n",
-            "p",
-            "e",
-            "cs2",
-            "n_TOV",
+        eos_only = {
+            key: value
+            for key, value in transformed_samples.items()
+            if key in derived_eos_keys
         }
-        eos_only = {k: v for k, v in transformed_samples.items() if k in eos_keys}
         self.add_derived_eos(eos_only)
 
         # If we selected a subset, filter log_prob and sampler fields to match
@@ -556,16 +563,7 @@ class InferenceResult:
 
             # Separate parameters from derived quantities
             # Heuristic: derived quantities have specific names
-            derived_keys = {
-                "masses_EOS",
-                "radii_EOS",
-                "Lambdas_EOS",
-                "n",
-                "p",
-                "e",
-                "cs2",
-                "n_TOV",
-            }
+            derived_keys = STANDARD_DERIVED_EOS_KEYS | self._derived_eos_keys
             sampler_specific_keys = {"weights", "ess", "logL", "logL_birth"}
 
             # Get sampler-specific data if present (use .get() to avoid mutating self.posterior)
@@ -674,9 +672,11 @@ class InferenceResult:
                     posterior[key] = f["posterior/parameters"][key][:]  # type: ignore[index]
 
             # Load from derived_eos subgroup
+            derived_eos_keys = set()
             if "posterior/derived_eos" in f:
                 for key in f["posterior/derived_eos"].keys():  # type: ignore[union-attr]
                     posterior[key] = f["posterior/derived_eos"][key][:]  # type: ignore[index]
+                    derived_eos_keys.add(key)
 
             # Load from sampler_specific subgroup
             if "posterior/sampler_specific" in f:
@@ -736,13 +736,15 @@ class InferenceResult:
 
         logger.info(f"Successfully loaded {sampler_type} results")
 
-        return cls(
+        result = cls(
             sampler_type=sampler_type,  # type: ignore[arg-type]
             posterior=posterior,
             metadata=metadata,
             histories=histories,
             fixed_params=fixed_params_loaded,
         )
+        result._derived_eos_keys.update(derived_eos_keys)
+        return result
 
     @property
     def config_dict(self) -> Dict[str, Any]:
@@ -827,21 +829,9 @@ class InferenceResult:
         # Posterior info
         # Extract parameter keys (excluding special fields)
         param_keys = [
-            k
-            for k in self.posterior.keys()
-            if k
-            not in {
-                "log_prob",
-                "masses_EOS",
-                "radii_EOS",
-                "Lambdas_EOS",
-                "n",
-                "p",
-                "e",
-                "cs2",
-                "n_TOV",
-                "_sampler_specific",
-            }
+            key
+            for key in self.posterior.keys()
+            if key not in {"log_prob", "_sampler_specific", *self._derived_eos_keys}
         ]
 
         lines.append("\nPosterior Samples:")

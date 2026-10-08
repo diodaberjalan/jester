@@ -80,6 +80,15 @@ class TOVSolverBase(ABC):
         """
         return []
 
+    def get_family_extra_keys(self) -> list[str]:
+        """Return names of solver-specific family-curve observables.
+
+        These quantities are returned in :attr:`FamilyData.extra` and are
+        propagated to the derived posterior datasets.  Solvers without
+        additional observables use the empty default.
+        """
+        return []
+
     def construct_family(
         self,
         eos_data: EOSData,

@@ -683,3 +683,7 @@ class ScalarTensorTOVSolver(TOVSolverBase):
 
     def get_required_parameters(self) -> list[str]:
         return ["beta_ST", "phi_inf_tgt", "phi_c"]
+
+    def get_family_extra_keys(self) -> list[str]:
+        """Return scalar--tensor observables produced for each family point."""
+        return ["lambda_S", "lambda_ST1", "lambda_ST2", "q"]
