@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "pulsars": {
+    "J0030": {
+      "amsterdam": "J00300451/amsterdam_pdtu"
+    },
+    "J0437": {
+      "amsterdam": "J04374715/amsterdam_cst_pdt",
+      "maryland": "J04374715/maryland"
+    },
+    "J0614": {
+      "amsterdam": "J06143329/amsterdam_st_pdt",
+      "maryland": "J06143329/maryland_3circle"
+    },
+    "J0740": {
+      "amsterdam": "J07406620/amsterdam_gamma_nicerxmm",
+      "maryland": "J07406620/maryland_dittmann2024_nicerxmm_full"
+    },
+    "J1614": {
+      "amsterdam": "J16142230/amsterdam_stu"
+    }
+  }
+}

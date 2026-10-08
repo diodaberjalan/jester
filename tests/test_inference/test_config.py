@@ -246,6 +246,11 @@ class TestLikelihoodConfig:
         assert config.type == "nicer"
         assert len(config.pulsars) == 1
 
+    def test_nicer_likelihood_name_only_uses_preset(self):
+        """NICER flow configurations can be portable and name-only."""
+        config = schema.NICERLikelihoodConfig(pulsars=[{"name": "J0030"}])
+        assert config.pulsars == [{"name": "J0030"}]
+
     def test_nicer_kde_likelihood_config(self):
         """Test NICER KDE-based likelihood configuration."""
         config = schema.NICERKDELikelihoodConfig(

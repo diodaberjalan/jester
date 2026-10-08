@@ -357,10 +357,8 @@ Constrain the mass–radius relation using NICER X-ray timing observations of mi
 ```yaml
 - type: "nicer"
   enabled: true
-  pulsars:                      # List of pulsars with flow model directories
+  pulsars:                      # Name-only entries use portable packaged presets
     - name: "J0030"
-      amsterdam_model_dir: "./flows/models/nicer_maf/J0030/amsterdam"
-      maryland_model_dir: "./flows/models/nicer_maf/J0030/maryland"
   N_masses_evaluation: 100      # Number of mass samples (optional, default: 100)
   N_masses_batch_size: 20       # Batch size for processing (optional, default: 20)
   seed: 42                      # Random seed for mass pre-sampling (optional, default: 42)
@@ -368,7 +366,7 @@ Constrain the mass–radius relation using NICER X-ray timing observations of mi
 
 **Field Details:**
 
-- **`pulsars`** (`list[dict]`) - List of pulsars with `name`, `amsterdam_model_dir`, and `maryland_model_dir` keys. Model directories must point to trained normalizing flow models.
+- **`pulsars`** (`list[dict]`) - List of pulsars with a `name` key. With no model-directory keys, JESTER resolves the validated packaged preset relative to its installed source tree. Optional `amsterdam_model_dir` and `maryland_model_dir` fields override that preset for a custom analysis.
 - **`N_masses_evaluation`** (`int`, default: `100`) - Number of mass samples to pre-sample from flow for deterministic evaluation
 - **`N_masses_batch_size`** (`int`, default: `20`) - Batch size for processing mass samples with jax.lax.map
 - **`seed`** (`int`, default: `42`) - Random seed for reproducible mass pre-sampling from flow

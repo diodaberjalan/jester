@@ -1,5 +1,8 @@
 """Tests for inference likelihood system (base, factory, specific likelihoods)."""
 
+import json
+from pathlib import Path
+
 import pytest
 import jax
 import jax.numpy as jnp
@@ -981,12 +984,42 @@ class TestNICERLikelihoodGroups:
         radii = jnp.linspace(13.0, 11.0, 50)
         return {"masses_EOS": masses, "radii_EOS": radii}
 
-    def test_raises_when_neither_group_provided(self):
-        """NICERLikelihood must raise if both model dirs are None."""
+    def test_unknown_pulsar_without_model_dirs_raises(self):
+        """An unknown name without custom paths has no packaged preset."""
         from jesterTOV.inference.likelihoods.nicer import NICERLikelihood
 
-        with pytest.raises(ValueError, match="At least one"):
-            NICERLikelihood("J0437", amsterdam_model_dir=None, maryland_model_dir=None)
+        with pytest.raises(ValueError, match="No packaged NICER preset"):
+            NICERLikelihood("J9999", amsterdam_model_dir=None, maryland_model_dir=None)
+
+    def test_name_only_uses_preset_and_superposes_registered_groups(self):
+        """Name-only J0614 resolves its two portable preset flow directories."""
+        from jesterTOV.inference.likelihoods.nicer import NICERLikelihood
+
+        mock_amsterdam = _make_mock_flow()
+        mock_maryland = _make_mock_flow()
+        with patch(
+            "jesterTOV.inference.flows.flow.Flow.from_directory",
+            side_effect=[mock_amsterdam, mock_maryland],
+        ) as loader:
+            likelihood = NICERLikelihood("J0614", N_masses_evaluation=10, seed=42)
+
+        assert len(likelihood.active_groups) == 2
+        assert likelihood.active_groups[0][0] is mock_amsterdam
+        assert likelihood.active_groups[1][0] is mock_maryland
+        model_dirs = [Path(call.args[0]).name for call in loader.call_args_list]
+        assert model_dirs == ["amsterdam_st_pdt", "maryland_3circle"]
+
+    def test_every_packaged_nicer_preset_is_complete(self):
+        """The data-driven registry cannot silently point to a broken flow."""
+        from jesterTOV.inference.likelihoods.nicer import NICERLikelihood
+
+        root = NICERLikelihood._preset_root()
+        manifest = json.loads((root / "presets.json").read_text())
+        assert manifest["pulsars"]
+        for pulsar_name in manifest["pulsars"]:
+            model_dirs = NICERLikelihood._get_preset_model_dirs(pulsar_name)
+            assert model_dirs
+            assert all(Path(path).is_absolute() for path in model_dirs.values())
 
     def test_amsterdam_only_initialization(self):
         """Amsterdam-only: flow is loaded and masses are pre-sampled."""

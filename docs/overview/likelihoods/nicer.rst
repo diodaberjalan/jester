@@ -9,12 +9,13 @@ By modelling the anisotropic X-ray emission from hot spots on the neutron star s
 NICER constrains the stellar mass and radius simultaneously, providing direct input for
 equation-of-state inference.
 
-JESTER currently supports four pulsars observed by NICER:
+JESTER currently supports five pulsars observed by NICER:
 
 * **PSR J0030+0451**
 * **PSR J0437-4715**
 * **PSR J0614-3329**
 * **PSR J0740+6620**
+* **PSR J1614-2230**
 
 The figure below shows the mass-radius posteriors for one representative analysis
 per pulsar, with filled contours at the 68% and 90% credible intervals. 
@@ -54,6 +55,13 @@ The pre-sampling at initialization fixes the mass grid for the entire run, which
 
 The default implementation is :class:`~jesterTOV.inference.likelihoods.nicer.NICERLikelihood` (flow-based).
 A legacy :class:`~jesterTOV.inference.likelihoods.nicer.NICERKDELikelihood` based on kernel density estimation of the raw posterior samples is also available for comparison.
+
+For portable run configurations, specify only the pulsar name.  JESTER resolves
+the recommended packaged flow or flows from ``flows/models/nicer_maf/presets.json``
+relative to the installed source tree, rather than relative to the YAML file.
+When a preset contains both Amsterdam and Maryland flows, they are superposed by
+the standard group-averaged likelihood.  Explicit ``amsterdam_model_dir`` and
+``maryland_model_dir`` fields remain available only for a deliberate custom override.
 
 ----
 
@@ -118,6 +126,22 @@ Two hotspot geometries × two prior choices:
 * ``J00300451_maryland_3spot_NICER_only_RM.npz`` — 3-spot, restricted-model prior
 * ``J00300451_maryland_3spot_NICER_only_full.npz`` — 3-spot, full prior
 
+**Amsterdam group — Vinciguerra et al. 2023**
+
+Four NICER-only analyses are available with pretrained flows in
+``flows/models/nicer_maf/J00300451/``:
+
+* ``J00300451_amsterdam_ST_U_NICER_only_Vinciguerra2023.npz`` — ``amsterdam_st_u_v2023``
+* ``J00300451_amsterdam_ST_PST_NICER_only_Vinciguerra2023.npz`` — ``amsterdam_st_pst_v2023``
+* ``J00300451_amsterdam_ST_PDT_NICER_only_Vinciguerra2023.npz`` — ``amsterdam_st_pdt_v2023``
+* ``J00300451_amsterdam_PDT_U_NICER_only_Vinciguerra2023.npz`` — ``amsterdam_pdt_u_v2023``
+
+**Amsterdam group — Kini et al. 2026**
+
+The NICER+XMM PDT-U analysis is available as
+``J00300451_amsterdam_PDTU_NICERXMM_Kini2026.npz`` with flow
+``flows/models/nicer_maf/J00300451/amsterdam_pdtu``.
+
 PSR J0437−4715
 ^^^^^^^^^^^^^^
 
@@ -146,6 +170,12 @@ Headline result using ST+PDT hotspot model:
 
 * ``J06143329_amsterdam_ST_PDT_NICER_only_Dittmann2025.npz``
 
+**Maryland group — Miller, Dittmann, Holt et al. 2026**
+
+The NICER-only, 3-circle restricted-model analysis is available as
+``J06143329_maryland_3circle_NICER_only_RM.npz`` with flow
+``flows/models/nicer_maf/J06143329/maryland_3circle``.
+
 PSR J0740+6620
 ^^^^^^^^^^^^^^
 
@@ -158,6 +188,10 @@ Most recent analysis using gamma hotspot model with NICER+XMM-Newton data:
 
 * ``J07406620_amsterdam_gamma_NICERXMM_equal_weights_recent.npz``
 
+The earlier Amsterdam ST-U NICER+XMM analysis is also available as
+``J07406620_amsterdam_STU_NICERXMM_Riley2021.npz`` with flow
+``flows/models/nicer_maf/J07406620/amsterdam_stu_nicerxmm``.
+
 **Maryland group — Miller et al. 2021** (`Zenodo 4670689 <https://zenodo.org/records/4670689>`_)
 
 Three dataset combinations x two prior choices:
@@ -169,8 +203,19 @@ Three dataset combinations x two prior choices:
 * ``J07406620_maryland_unknown_NICERXMM_relative_RM.npz``
 * ``J07406620_maryland_unknown_NICERXMM_relative_full.npz``
 
+The Dittmann et al. 2024 NICER+XMM full-atmosphere analysis is also available as
+``J07406620_maryland_NICERXMM_full_Dittmann2024.npz`` with flow
+``flows/models/nicer_maf/J07406620/maryland_dittmann2024_nicerxmm_full``.
+
 "NICER+XMM" indicates joint analysis; "relative" includes relative calibration
 between instruments; "RM" uses a restricted-model prior.
+
+PSR J1614-2230
+^^^^^^^^^^^^^^^
+
+The Amsterdam ST-U NICER-only analysis from Mauviard et al. 2026 is available as
+``J16142230_amsterdam_STU_NICER_only_Mauviard2026.npz`` with flow
+``flows/models/nicer_maf/J16142230/amsterdam_stu``.
 
 Loading the data
 ^^^^^^^^^^^^^^^^

@@ -6,6 +6,9 @@ This module provides two implementations:
 2. NICERKDELikelihood - KDE-based (legacy, for backward compatibility)
 """
 
+import json
+from pathlib import Path
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -39,20 +42,22 @@ class NICERLikelihood(LikelihoodBase):
     3. Evaluating the flow log probability at (mass, radius)
     4. Averaging over all samples, then averaging over available groups
 
-    At least one of ``amsterdam_model_dir`` or ``maryland_model_dir`` must be provided.
-    If only one group is provided, the likelihood uses only that group.
+    When both model-directory arguments are omitted, the likelihood resolves the
+    recommended packaged flows for the named pulsar from ``nicer_maf/presets.json``.
+    This is the portable default: it does not depend on the configuration file's
+    location.  Explicit model-directory arguments remain available for custom
+    analyses; when either is supplied, no preset is added implicitly.
 
     Parameters
     ----------
     psr_name : str
         Pulsar name (e.g., "J0030", "J0740", "J0437", "J0614")
     amsterdam_model_dir : str | None
-        Path to directory containing Amsterdam flow model
-        (flow_weights.eqx, metadata.json, flow_kwargs.json).
-        If None, Amsterdam group is omitted.
+        Optional path to a custom Amsterdam flow model.  Omit both group paths
+        to use the packaged preset.
     maryland_model_dir : str | None
-        Path to directory containing Maryland flow model.
-        If None, Maryland group is omitted.
+        Optional path to a custom Maryland flow model.  Omit both group paths
+        to use the packaged preset.
     penalty_value : float, optional
         Penalty value for samples where mass exceeds Mtov (default: -99999.0)
     N_masses_evaluation : int, optional
@@ -108,9 +113,13 @@ class NICERLikelihood(LikelihoodBase):
         self.seed = seed
 
         if amsterdam_model_dir is None and maryland_model_dir is None:
-            raise ValueError(
-                f"At least one of amsterdam_model_dir or maryland_model_dir must be "
-                f"provided for {psr_name}."
+            preset_dirs = self._get_preset_model_dirs(psr_name)
+            amsterdam_model_dir = preset_dirs.get("amsterdam")
+            maryland_model_dir = preset_dirs.get("maryland")
+            logger.info(
+                "Using packaged NICER preset(s) for %s: %s",
+                psr_name,
+                ", ".join(sorted(preset_dirs)),
             )
 
         key = jax.random.key(seed)
@@ -178,39 +187,79 @@ class NICERLikelihood(LikelihoodBase):
         )
         return flow, mass_samples
 
-    def _get_preset_model_path(self, psr_name: str, group: str) -> str:
+    @staticmethod
+    def _preset_root() -> Path:
+        """Return the installed package's NICER flow-model directory."""
+        return Path(__file__).resolve().parent.parent / "flows" / "models" / "nicer_maf"
+
+    @classmethod
+    def _get_preset_model_dirs(cls, psr_name: str) -> dict[str, str]:
+        """Resolve and validate the packaged flow preset for ``psr_name``.
+
+        The small JSON manifest separates the scientific selection from code and
+        from machine-specific run-directory layouts.  Paths are constrained to
+        the packaged NICER model root, and every required flow artifact is
+        checked before inference starts, yielding an actionable error instead of
+        a later deserialization failure.
         """
-        Get preset model path for a pulsar and analysis group.
+        root = cls._preset_root().resolve()
+        manifest_path = root / "presets.json"
+        try:
+            with manifest_path.open() as stream:
+                manifest = json.load(stream)
+            presets = manifest["pulsars"]
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            raise RuntimeError(
+                f"Could not read NICER flow preset manifest: {manifest_path}"
+            ) from error
 
-        Parameters
-        ----------
-        psr_name : str
-            Pulsar name (e.g., "J0030", "J0740")
-        group : str
-            Analysis group ("amsterdam" or "maryland")
+        normalized_name = psr_name.upper()
+        preset = presets.get(normalized_name)
+        if not isinstance(preset, dict):
+            available = ", ".join(sorted(presets))
+            raise ValueError(
+                f"No packaged NICER preset for pulsar '{psr_name}'. "
+                f"Available presets: {available}. Provide explicit model directories "
+                "for a custom analysis."
+            )
 
-        Returns
-        -------
-        str
-            Path to preset model directory
+        allowed_groups = {"amsterdam", "maryland"}
+        unknown_groups = set(preset) - allowed_groups
+        if unknown_groups:
+            raise RuntimeError(
+                f"Invalid NICER preset groups for {normalized_name}: "
+                f"{sorted(unknown_groups)}"
+            )
+        if not preset:
+            raise RuntimeError(f"NICER preset for {normalized_name} has no flow groups")
 
-        Raises
-        ------
-        ValueError
-            If no preset exists for this pulsar/group combination
-        """
-        # TODO: Define preset paths once NICER flow models are trained
-        # For now, this is a placeholder that will be updated in Phase 3
+        required_files = ("flow_weights.eqx", "flow_kwargs.json", "metadata.json")
+        resolved: dict[str, str] = {}
+        for group, relative_path in preset.items():
+            if not isinstance(relative_path, str) or not relative_path:
+                raise RuntimeError(
+                    f"NICER preset path for {normalized_name}/{group} must be a non-empty string"
+                )
+            model_dir = (root / relative_path).resolve()
+            if not model_dir.is_relative_to(root):
+                raise RuntimeError(
+                    f"NICER preset path escapes the model root: {relative_path}"
+                )
+            missing = [name for name in required_files if not (model_dir / name).is_file()]
+            if missing:
+                raise FileNotFoundError(
+                    f"NICER preset for {normalized_name}/{group} is incomplete at "
+                    f"{model_dir}; missing: {', '.join(missing)}"
+                )
+            resolved[group] = str(model_dir)
+        return resolved
 
-        # Example preset structure (to be implemented):
-        # base_dir = Path(__file__).parent.parent / "flows" / "models" / "nicer_maf"
-        # model_dir = base_dir / psr_name / f"{psr_name}_{group}_NICER_model"
-
-        raise NotImplementedError(
-            f"Preset model paths for {psr_name} {group} not yet implemented. "
-            "Please provide explicit model_dir paths or train NICER flows first "
-            "(see TODO_FLOW_TRAINING.md Phase 3)."
-        )
+    @classmethod
+    def _get_preset_model_path(cls, psr_name: str, group: str) -> str | None:
+        """Return one validated packaged flow path, or ``None`` if absent."""
+        if group not in {"amsterdam", "maryland"}:
+            raise ValueError(f"Unknown NICER analysis group '{group}'")
+        return cls._get_preset_model_dirs(psr_name).get(group)
 
     def evaluate(self, params: dict[str, Float | Array]) -> Float:
         """
