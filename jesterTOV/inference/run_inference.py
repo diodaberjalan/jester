@@ -77,6 +77,13 @@ def determine_keep_names(
     chieft_enabled = any(
         lk.enabled and lk.type == "chieft" for lk in config.likelihoods
     )
+    if chieft_enabled and not isinstance(config.eos, BaseMetamodelEOSConfig):
+        logger.warning(
+            "ChiEFT likelihood is enabled with non-nucleonic EOS type '%s'. "
+            "No nbreak is required; the constraint will be applied from 0.75 n_sat "
+            "to the lower of the EOS endpoint and the ChiEFT data limit.",
+            config.eos.type,
+        )
     if chieft_enabled and isinstance(config.eos, MetamodelCSEEOSConfig):
         if "nbreak" not in prior.parameter_names and "nbreak" not in _fixed:
             raise ValueError(

@@ -231,9 +231,10 @@ class MaxMassBoundsLikelihood(LikelihoodBase):
         Mean mass of the lower bound observation(s) in solar masses.
     lower_std : float or array_like
         1-sigma uncertainty of the lower bound observation(s) in solar masses.
-    upper_mean : float
-        Mean mass of the upper bound observation in solar masses.
-    upper_std : float
+    upper_mean : float, optional
+        Mean mass of the upper bound observation in solar masses. If omitted
+        together with ``upper_std``, only the pulsar lower bounds are applied.
+    upper_std : float, optional
         1-sigma uncertainty of the upper bound observation in solar masses.
     m_min : float, optional
         Minimum mass for the integration lower bound in solar masses. This should be
@@ -251,10 +252,10 @@ class MaxMassBoundsLikelihood(LikelihoodBase):
         Observed lower mass means in solar masses
     lower_std : Array
         Observed lower mass uncertainties in solar masses
-    upper_mean : float
-        Observed upper mass mean in solar masses
-    upper_std : float
-        Observed upper mass uncertainty in solar masses
+    upper_mean : float or None
+        Observed upper mass mean in solar masses, if configured
+    upper_std : float or None
+        Observed upper mass uncertainty in solar masses, if configured
     m_min : float
         Minimum mass threshold (solar masses)
     penalty_value : float
@@ -280,8 +281,8 @@ class MaxMassBoundsLikelihood(LikelihoodBase):
     name: str
     lower_mean: Float[Array, " n_lower"]
     lower_std: Float[Array, " n_lower"]
-    upper_mean: float
-    upper_std: float
+    upper_mean: float | None
+    upper_std: float | None
     m_min: float
     penalty_value: float
 
@@ -290,8 +291,8 @@ class MaxMassBoundsLikelihood(LikelihoodBase):
         name: str,
         lower_mean: float | list[float] | Array,
         lower_std: float | list[float] | Array,
-        upper_mean: float,
-        upper_std: float,
+        upper_mean: float | None = None,
+        upper_std: float | None = None,
         m_min: float = 0.1,
         penalty_value: float = -1e5,
     ) -> None:
@@ -300,6 +301,10 @@ class MaxMassBoundsLikelihood(LikelihoodBase):
         # Convert lower bounds to arrays to easily handle 1 or multiple pulsars
         self.lower_mean = jnp.atleast_1d(jnp.array(lower_mean))
         self.lower_std = jnp.atleast_1d(jnp.array(lower_std))
+        if (upper_mean is None) != (upper_std is None):
+            raise ValueError(
+                "upper_mean and upper_std must either both be provided or both be omitted"
+            )
         self.upper_mean = upper_mean
         self.upper_std = upper_std
         self.m_min = m_min
@@ -342,12 +347,15 @@ class MaxMassBoundsLikelihood(LikelihoodBase):
         z_lower = (mtov - self.lower_mean) / self.lower_std
         log_like_lower = jnp.sum(norm.logcdf(z_lower))
 
-        # Upper bound (e.g. GW170817):
+        # Optional upper bound (e.g. GW170817):
         #   log(1 - CDF((M_TOV - mu_upper) / sigma_upper))
         # Mathematically equivalent to log(CDF((mu_upper - M_TOV) / sigma_upper))
-        # due to symmetry, avoiding numerical underflow from log(1 - exp(...))
-        z_upper = (self.upper_mean - mtov) / self.upper_std
-        log_like_upper = norm.logcdf(z_upper)
+        # due to symmetry, avoiding numerical underflow from log(1 - exp(...)).
+        if self.upper_mean is None:
+            log_like_upper = 0.0
+        else:
+            z_upper = (self.upper_mean - mtov) / self.upper_std
+            log_like_upper = norm.logcdf(z_upper)
 
         # Combine likelihoods and apply penalty if mtov is unphysical
         log_likelihood = jnp.where(

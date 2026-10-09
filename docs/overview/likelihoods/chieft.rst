@@ -18,7 +18,7 @@ With these bounds loaded, the likelihood function of a particular EOS, which pre
 
     P(\theta_{\rm{EOS}} | \chi {\rm{EFT}}) \propto \exp\left( \int_{0.75 n_{\rm{sat}}}^{n_{\rm{break}}} \frac{\log f(p(\theta_{\rm{EOS}} ; n), n)}{n_{\rm{break}} - 0.75 n_{\rm{sat}}} {\rm{d}} n \right) \, ,
 
-where the integration is terminated at the density :math:`n_{\rm{break}}` where the chiEFT prediction breaks down. This means that the likelihood can only be evaluated for EOSs that either freely sample this parameter, or fix it otherwise. 
+where the integration is terminated at the density :math:`n_{\rm{break}}` where the chiEFT prediction breaks down. For EOSs with a CSE transition, this is the sampled or fixed ``nbreak`` parameter. Other EOS parameterizations, such as the spectral EOS, do not require ``nbreak``: their constraint is integrated to the smaller of the EOS grid endpoint and the upper density covered by the chiEFT data. A warning is logged for this non-nucleonic application.
 Here, the function :math:`f(p, n)` is a score function used to smoothly taper off the likelihood function around the chiEFT bounds, and is defined as (see ``arXiv:2402.04172v3``, Sec. III A for details)
 
 .. math::

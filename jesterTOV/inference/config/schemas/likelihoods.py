@@ -907,18 +907,21 @@ class MaxMassBoundsLikelihoodConfig(BaseLikelihoodConfig):
         min_length=1,
     )
 
-    upper_mean: float = Field(
+    upper_mean: float | None = Field(
+        default=None,
         description=(
-            "Mean mass of the upper bound observation (e.g., GW170817 remnant "
-            "maximum mass estimate) in solar masses."
+            "Optional mean mass of the upper bound observation (e.g., GW170817 "
+            "remnant maximum mass estimate) in solar masses. Must be provided "
+            "together with upper_std."
         )
     )
 
-    upper_std: float = Field(
+    upper_std: float | None = Field(
+        default=None,
         description=(
-            "1-sigma uncertainty of the upper bound observation in solar masses."
-        ),
-        gt=0.0,
+            "Optional 1-sigma uncertainty of the upper bound observation in solar "
+            "masses. Must be provided together with upper_mean."
+        )
     )
 
     penalty_value: float = Field(
@@ -943,6 +946,16 @@ class MaxMassBoundsLikelihoodConfig(BaseLikelihoodConfig):
                 f"lower_mean ({len(self.lower_mean)} entries) and "
                 f"lower_std ({len(self.lower_std)} entries) must have the same length"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_optional_upper_bound(self) -> "MaxMassBoundsLikelihoodConfig":
+        if (self.upper_mean is None) != (self.upper_std is None):
+            raise ValueError(
+                "upper_mean and upper_std must either both be provided or both be omitted"
+            )
+        if self.upper_std is not None and self.upper_std <= 0:
+            raise ValueError(f"upper_std must be positive, got {self.upper_std}")
         return self
 
 

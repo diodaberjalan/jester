@@ -96,7 +96,8 @@ class ChiEFTLikelihood(LikelihoodBase):
     where β = 6/(p_high - p_low) controls the penalty strength.
 
     The integration is performed from 0.75 n_sat (lower limit of chiEFT validity)
-    to nbreak (where the CSE extension begins, if present).
+    to the CSE transition density ``nbreak`` when present.  EOS models without
+    a CSE/nucleonic transition instead use the upper endpoint of their EOS grid.
 
     See Also
     --------
@@ -173,7 +174,8 @@ class ChiEFTLikelihood(LikelihoodBase):
             Dictionary containing EOS quantities from the transform. Required keys:
             - "n" : Baryon number density grid (geometric units, i.e. fm⁻³ × ``utils.fm_inv3_to_geometric``)
             - "p" : Pressure values on density grid (geometric units, i.e. MeV/fm³ × ``utils.MeV_fm_inv3_to_geometric``)
-            - "nbreak" : Breaking density where CSE begins (fm⁻³, physical units)
+            - "nbreak" : Optional breaking density where CSE begins (fm⁻³,
+              physical units).  If absent, the EOS grid endpoint is used.
 
         Returns
         -------
@@ -188,37 +190,38 @@ class ChiEFTLikelihood(LikelihoodBase):
         n_sat (saturation density = 0.16 fm⁻³).  Input quantities are
         converted at the start:
 
-        - ``nbreak`` [fm⁻³] → ``nbreak / 0.16`` [n_sat]
+        - ``nbreak`` [fm⁻³] → ``nbreak / 0.16`` [n_sat], when provided
         - ``n`` [geometric] → ``n / fm_inv3_to_geometric / 0.16`` [n_sat]
         - ``p`` [geometric] → ``p / MeV_fm_inv3_to_geometric`` [MeV/fm³]
 
         The integration runs from 0.75 n_sat (lower limit of chiEFT validity)
-        to ``min(nbreak, n_max_nsat)`` [n_sat] using ``nb_n`` equally spaced
-        points. The upper limit is capped at ``n_max_nsat`` (2.0 n_sat for the
-        default Koehn et al. 2025 bands) to avoid integrating over the flat
-        constant extrapolation that ``jnp.interp`` produces beyond the data
-        range, which has no physical meaning. If ``nbreak`` falls below
-        0.75 n_sat the upper limit is clamped to ``0.75 + 1e-8`` n_sat to
+        to ``min(nbreak, n_max_nsat)`` [n_sat] when ``nbreak`` is available,
+        or to ``min(n_EOS,max, n_max_nsat)`` otherwise, using ``nb_n`` equally
+        spaced points. The upper limit is capped at ``n_max_nsat`` (2.0 n_sat
+        for the default Koehn et al. 2025 bands) to avoid integrating over the
+        flat constant extrapolation that ``jnp.interp`` produces beyond the
+        data range, which has no physical meaning. If the selected endpoint
+        falls below 0.75 n_sat it is clamped to ``0.75 + 1e-8`` n_sat to
         prevent a degenerate integration range.
         """
         # Get relevant parameters
         n, p = params["n"], params["p"]
-        nbreak = params["nbreak"]
 
         # Convert all densities to n_sat units (n_sat = 0.16 fm^-3).
-        # nbreak arrives in fm^-3 (physical); n arrives in geometric units.
-        # Pressures are converted from geometric to MeV/fm^3.
-        nbreak = nbreak / 0.16  # fm^-3 → n_sat
+        # n arrives in geometric units and pressure in MeV/fm^3 geometric units.
         n = n / utils.fm_inv3_to_geometric / 0.16  # geometric → n_sat
         p = p / utils.MeV_fm_inv3_to_geometric  # geometric → MeV/fm^3
 
-        # Cap the integration at the maximum density covered by the chiEFT data.
-        # Beyond n_max_nsat the data ends and jnp.interp returns a flat
-        # (constant) extrapolation that has no physical meaning.
-        # Both nbreak and n_max_nsat are in n_sat units at this point.
-        n_upper = jnp.minimum(nbreak, self.n_max_nsat)
+        # CSE models provide nbreak, which preserves the historical integration
+        # range.  Other EOS parameterizations (e.g. spectral) have no such
+        # transition, so constrain their curve through its available endpoint.
+        if "nbreak" in params:
+            nbreak = params["nbreak"] / 0.16  # fm^-3 → n_sat
+            n_upper = jnp.minimum(nbreak, self.n_max_nsat)
+        else:
+            n_upper = jnp.minimum(n[-1], self.n_max_nsat)
 
-        # Guard against a degenerate integration range when nbreak < 0.75 n_sat.
+        # Guard against a degenerate integration range below 0.75 n_sat.
         n_upper = jnp.maximum(n_upper, 0.75 + 1e-8)
 
         # Build density grid in n_sat units: lower limit is 0.75 n_sat.

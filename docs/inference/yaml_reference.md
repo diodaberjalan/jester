@@ -429,9 +429,9 @@ Constrain neutron star masses using radio pulsar timing measurements. For the ph
 
 ::::
 
-### Maximum mass bounds (joint lower + upper)
+### Maximum mass bounds (lower-only or joint lower + upper)
 
-Constrain the maximum TOV mass using both lower bounds from heavy pulsars and an upper bound from multimessenger events (e.g., GW170817). This is a joint constraint based on Dietrich et al. (2020) that uses CDF products. The Python class is {class}`~jesterTOV.inference.likelihoods.radio.MaxMassBoundsLikelihood`.
+Constrain the maximum TOV mass using lower bounds from heavy pulsars, optionally combined with an upper bound from multimessenger events (e.g., GW170817). This is a CDF-product constraint based on Dietrich et al. (2020). The Python class is {class}`~jesterTOV.inference.likelihoods.radio.MaxMassBoundsLikelihood`.
 
 ::::{dropdown} **Maximum Mass Bounds Likelihood**
 
@@ -451,8 +451,8 @@ Constrain the maximum TOV mass using both lower bounds from heavy pulsars and an
 - **`name`** (`str`, default: `"Joint_Mass_Bounds"`) - Identifier for this likelihood constraint
 - **`lower_mean`** (`list[float]`) - Mean masses of the lower bound observations (pulsar timing) in solar masses. Each entry corresponds to a precisely measured heavy pulsar.
 - **`lower_std`** (`list[float]`) - 1-sigma uncertainties of the lower bound observations in solar masses. Must have the same length as `lower_mean` and all values must be positive.
-- **`upper_mean`** (`float`) - Mean mass of the upper bound observation (e.g., GW170817 remnant) in solar masses.
-- **`upper_std`** (`float`) - 1-sigma uncertainty of the upper bound observation in solar masses.
+- **`upper_mean`** (`float | null`, default: `null`) - Optional mean mass of the upper-bound observation (e.g., GW170817 remnant) in solar masses. Omit it together with `upper_std` for a pulsar-lower-bound-only constraint.
+- **`upper_std`** (`float | null`, default: `null`) - Optional 1-sigma uncertainty of the upper-bound observation in solar masses. It must be supplied whenever `upper_mean` is supplied.
 - **`penalty_value`** (`float`, default: `-1e5`) - Log-likelihood penalty for invalid TOV solutions (M_TOV <= m_min).
 
 ::::

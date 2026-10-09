@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import jax
@@ -24,8 +25,10 @@ from jesterTOV.inference.likelihoods.constraints import (
     check_gamma_bounds,
 )
 from jesterTOV.inference.likelihoods.chieft import ChiEFTLikelihood
-from jesterTOV.inference.likelihoods.radio import RadioTimingLikelihood, MaxMassBoundsLikelihood, MaxMassBoundsLikelihood
+from jesterTOV.inference.likelihoods.radio import RadioTimingLikelihood, MaxMassBoundsLikelihood
 from jesterTOV.inference.base import LikelihoodBase
+from jesterTOV.inference.run_inference import determine_keep_names
+from jesterTOV import utils
 
 
 class TestZeroLikelihood:
@@ -540,6 +543,42 @@ class TestChiEFTLikelihood:
         low_pressure = likelihood.EFT_low(test_density)
         high_pressure = likelihood.EFT_high(test_density)
         assert low_pressure < high_pressure  # Low bound should be less than high bound
+
+    def test_chieft_without_nbreak_uses_eos_endpoint(self):
+        """Non-CSE EOSs can evaluate ChiEFT without an nbreak parameter."""
+        likelihood = ChiEFTLikelihood(nb_n=30)
+        n_nsat = jnp.linspace(0.5, 3.0, 100)
+        midpoint_pressure = 0.5 * (
+            likelihood.EFT_low(n_nsat) + likelihood.EFT_high(n_nsat)
+        )
+        params = {
+            "n": n_nsat * 0.16 * utils.fm_inv3_to_geometric,
+            "p": midpoint_pressure * utils.MeV_fm_inv3_to_geometric,
+        }
+
+        no_nbreak_result = likelihood.evaluate(params)
+        legacy_result = likelihood.evaluate({**params, "nbreak": 100.0 * 0.16})
+
+        assert jnp.isfinite(no_nbreak_result)
+        # A grid extending beyond the table must produce the same result as the
+        # historical nbreak path when nbreak is above the table's maximum density.
+        assert jnp.allclose(no_nbreak_result, legacy_result)
+
+    def test_chieft_non_nucleonic_eos_logs_warning(self):
+        """Spectral EOSs warn but do not require a synthetic nbreak parameter."""
+        config = SimpleNamespace(
+            eos=schema.SpectralEOSConfig(),
+            likelihoods=[SimpleNamespace(enabled=True, type="chieft")],
+        )
+        prior = SimpleNamespace(parameter_names=[])
+
+        with patch("jesterTOV.inference.run_inference.logger.warning") as warning:
+            keep_names = determine_keep_names(config, prior)
+
+        assert keep_names is None
+        warning.assert_called_once()
+        assert "non-nucleonic EOS type '%s'" in warning.call_args.args[0]
+        assert warning.call_args.args[1] == "spectral"
 
 
 class TestRadioTimingLikelihood:
@@ -1243,6 +1282,30 @@ class TestMaxMassBoundsLikelihood:
         assert len(likelihood.lower_mean) == 1
         assert jnp.allclose(likelihood.lower_mean[0], 2.01)
 
+    def test_lower_bounds_only(self):
+        """A pulsar-only maximum-mass constraint has no upper-mass penalty."""
+        likelihood = MaxMassBoundsLikelihood(
+            name="Pulsar_Lower_Bounds",
+            lower_mean=self.LOWER_MEANS,
+            lower_std=self.LOWER_STDS,
+        )
+        lower_mtov = likelihood.evaluate({"masses_EOS": jnp.linspace(1.0, 1.8, 100)})
+        higher_mtov = likelihood.evaluate({"masses_EOS": jnp.linspace(1.0, 2.6, 100)})
+
+        assert likelihood.upper_mean is None
+        assert likelihood.upper_std is None
+        assert higher_mtov > lower_mtov
+
+    def test_partial_upper_bound_fails(self):
+        """The two upper-bound fields must be provided together."""
+        with pytest.raises(ValueError, match="both be provided or both be omitted"):
+            MaxMassBoundsLikelihood(
+                name="Invalid_Upper_Bound",
+                lower_mean=self.LOWER_MEANS,
+                lower_std=self.LOWER_STDS,
+                upper_mean=self.UPPER_MEAN,
+            )
+
     def test_evaluate_returns_finite(self, likelihood, intermediate_params):
         """Test that evaluate returns a finite scalar."""
         result = likelihood.evaluate(intermediate_params)
@@ -1371,6 +1434,19 @@ class TestMaxMassBoundsLikelihood:
         assert isinstance(likelihood, MaxMassBoundsLikelihood)
         assert likelihood.name == "Factory_Test"
         assert len(likelihood.lower_mean) == 2
+
+    def test_lower_bounds_only_config_and_factory(self):
+        """The YAML schema and likelihood factory accept an omitted upper bound."""
+        config = schema.MaxMassBoundsLikelihoodConfig(
+            enabled=True,
+            name="Pulsar_Lower_Bounds",
+            lower_mean=self.LOWER_MEANS,
+            lower_std=self.LOWER_STDS,
+        )
+        likelihood = factory.create_likelihood(config)
+
+        assert isinstance(likelihood, MaxMassBoundsLikelihood)
+        assert likelihood.upper_mean is None
 
     def test_integration_with_factory_and_combined(self):
         """Test MaxMassBoundsLikelihood in combined likelihood pipeline."""
