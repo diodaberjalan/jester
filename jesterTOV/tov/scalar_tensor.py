@@ -14,9 +14,8 @@ where the gravitational interaction includes both a metric tensor and a scalar f
 import functools
 import jax
 import jax.numpy as jnp
-import jax.nn as jnn
 from jax import lax
-from diffrax import diffeqsolve, ODETerm, Dopri8, Dopri5, Tsit5, Bosh3, SaveAt, PIDController, Event, RecursiveCheckpointAdjoint
+from diffrax import diffeqsolve, ODETerm, Dopri5, Tsit5, Bosh3, SaveAt, PIDController, Event, RecursiveCheckpointAdjoint
 
 from jesterTOV import utils
 from jesterTOV.tov.base import TOVSolverBase
@@ -235,9 +234,86 @@ def _tov_ode_iter_tidal(h, y, eos):
     )
 
 
+def _recover_background(forward_solver, active):
+    """Recover an unresolved shooting root using the tested grid and bisection.
+
+    ``forward_solver`` returns residual, (radius, mass), and surface validity.
+    Inactive lanes use the existing NaN sentinel: no recovery ODE steps under
+    vmap, even when another lane needs the fallback. Never accept a cutoff
+    endpoint as a stellar surface.
+    """
+    grid = jnp.concatenate((
+        jnp.array([0.0]), jnp.geomspace(1e-6, 0.02, 28),
+        jnp.linspace(0.02, 0.4, 32)[1:], jnp.array([0.5, 0.65, 0.8]),
+    ))
+
+    def evaluate(phi, enabled):
+        residual, (radius, mass), valid = forward_solver(
+            jnp.array([jnp.where(active & enabled, phi, jnp.nan)])
+        )
+        return jnp.array([residual[0], radius, mass]), valid
+
+    values, valid = jax.vmap(lambda phi: evaluate(phi, True))(grid)
+    residuals = values[:, 0]
+    signs = valid[:-1] & valid[1:] & (residuals[:-1] * residuals[1:] <= 0)
+    have_sign = jnp.any(signs)
+    si = jnp.argmax(signs)
+    boundary = valid[:-1] & ~valid[1:] & (residuals[:-1] < 0)
+    have_boundary = jnp.any(boundary) & ~have_sign
+    bi = jnp.argmax(boundary)
+
+    def boundary_cond(state):
+        k, _, _, _, found = state
+        return (k < 24) & have_boundary & ~found
+
+    def boundary_step(state):
+        k, lo, hi, flo, found = state
+        enabled = have_boundary & ~found
+        mid = (lo + hi) / 2
+        value, good = evaluate(mid, enabled)
+        hit = enabled & good & (value[0] >= 0)
+        move = enabled & good & ~hit
+        return (k + 1, jnp.where(move, mid, lo),
+                jnp.where(hit | (enabled & ~good), mid, hi),
+                jnp.where(move, value[0], flo), found | hit)
+
+    _, lo, hi, flo, found = lax.while_loop(
+        boundary_cond, boundary_step,
+        (jnp.int32(0), grid[bi], grid[bi + 1], residuals[bi], jnp.array(False)),
+    )
+    lo = jnp.where(have_sign, grid[si], lo)
+    hi = jnp.where(have_sign, grid[si + 1], hi)
+    flo = jnp.where(have_sign, residuals[si], flo)
+    have = have_sign | found
+
+    def bisect_cond(state):
+        k, _, _, _, done, bad, _, _ = state
+        return (k < 40) & have & ~done & ~bad
+
+    def bisect_step(state):
+        k, lo, hi, flo, done, bad, root, best = state
+        enabled = have & ~done & ~bad
+        mid = (lo + hi) / 2
+        value, good = evaluate(mid, enabled)
+        right = enabled & good & (flo * value[0] > 0)
+        return (k + 1, jnp.where(right, mid, lo),
+                jnp.where(enabled & good & ~right, mid, hi),
+                jnp.where(right, value[0], flo),
+                done | (enabled & good & (jnp.abs(value[0]) < 1e-4)),
+                bad | (enabled & ~good), jnp.where(enabled, mid, root),
+                jnp.where(enabled, value, best))
+
+    _, _, _, _, done, bad, phi, best = lax.while_loop(
+        bisect_cond, bisect_step,
+        (jnp.int32(0), lo, hi, flo, jnp.array(False), jnp.array(False),
+         jnp.array(jnp.nan), jnp.full(3, jnp.nan)),
+    )
+    return phi, best[1], best[2], best[0], have & done & ~bad
+
+
 @functools.partial(jax.jit, static_argnames=["max_iterations", "calculate_tidal"])
 def _compiled_tov_solve(
-    pc, beta_ST, phi_inf_target, phi0, ns, ps, hs, es, dloge_dlogps, max_iterations=100, calculate_tidal=True
+    pc, beta_ST, phi_inf_target, phi0, ns, ps, hs, es, dloge_dlogps, max_iterations=12, calculate_tidal=True
 ):
     
     # Calculate log_ps_nsat
@@ -293,6 +369,58 @@ def _compiled_tov_solve(
     damping = 0.5
     tol = 1e-4
 
+    def forward_solver(params):
+        phi0_trial = params[0]
+        M_limit = 7.0 * utils.solar_mass_in_meter
+
+        # Fast-skip for converged iterations (injected with NaN)
+        is_nan = jnp.isnan(phi0_trial)
+        m0_eff = jnp.where(is_nan, M_limit + 10.0, m0)
+        t0_eff = jnp.where(is_nan, 0.0, h0)
+        y0 = (r0, m0_eff, nu0, psi0, phi0_trial)
+
+        def mass_event(t, y, args, **kwargs):
+            return y[1] > M_limit
+
+        sol_iter = diffeqsolve(
+            ODETerm(_tov_ode_iter),
+            Bosh3(scan_kind="bounded"),
+            t0=t0_eff,
+            t1=0,
+            dt0=dh,
+            y0=y0,
+            args=eos_dict,
+            saveat=SaveAt(t1=True),
+            stepsize_controller=PIDController(rtol=1e-5, atol=1e-6),
+            event=Event(mass_event),
+            adjoint=RecursiveCheckpointAdjoint(),
+            max_steps=500,
+            throw=False,
+        )
+        R = sol_iter.ys[0][-1]
+        M_s = sol_iter.ys[1][-1]
+        nu_s = sol_iter.ys[2][-1]
+        psi_s = sol_iter.ys[3][-1]
+        phi_s = sol_iter.ys[4][-1]
+
+        nu_s_prime = 2 * M_s / (R * (R - 2.0 * M_s)) + R * jnp.power(psi_s, 2)
+
+        front = (
+            2 * psi_s / jnp.sqrt(jnp.power(nu_s_prime, 2) + 4 * jnp.power(psi_s, 2) + 1e-25)
+        )
+        inside_tanh = jnp.sqrt(
+            jnp.power(nu_s_prime, 2) + 4 * jnp.power(psi_s, 2)
+        ) / (nu_s_prime + 2 / R + 1e-25)
+        inside_tanh_safe = jnp.clip(inside_tanh, -0.999999, 0.999999)
+        phi_inf = phi_s + front * jnp.arctanh(inside_tanh_safe)
+
+        residual = jnp.array([phi_inf - phi_inf_target])
+        surface_ok = (sol_iter.result._value == 0) & (sol_iter.ts[-1] == 0)
+        surface_ok &= jnp.all(jnp.isfinite(jnp.array([
+            residual[0], R, M_s, inside_tanh,
+        ]))) & (R > 0) & (M_s > 0)
+        return residual, (R, M_s), surface_ok
+
     def run_iteration(phi0_init):
         big = 1e9
         init_state = (
@@ -302,66 +430,19 @@ def _compiled_tov_solve(
             0.0,
             big,
             jnp.array([phi0_init], dtype=jnp.float64),
-            jnp.array([big], dtype=jnp.float64)
+            jnp.array([big], dtype=jnp.float64),
+            jnp.array(False),
         )
 
-        def forward_solver(params):
-            phi0_trial = params[0]
-            M_limit = 7.0 * utils.solar_mass_in_meter
-
-            # Fast-skip for converged iterations (injected with NaN)
-            is_nan = jnp.isnan(phi0_trial)
-            m0_eff = jnp.where(is_nan, M_limit + 10.0, m0)
-            t0_eff = jnp.where(is_nan, 0.0, h0)
-            y0 = (r0, m0_eff, nu0, psi0, phi0_trial)
-
-            def mass_event(t, y, args, **kwargs):
-                return y[1] > M_limit
-
-            sol_iter = diffeqsolve(
-                ODETerm(_tov_ode_iter),
-                Bosh3(scan_kind="bounded"),
-                t0=t0_eff,
-                t1=0,
-                dt0=dh,
-                y0=y0,
-                args=eos_dict,
-                saveat=SaveAt(t1=True),
-                stepsize_controller=PIDController(rtol=1e-5, atol=1e-6),
-                event=Event(mass_event),
-                adjoint=RecursiveCheckpointAdjoint(),
-                max_steps=500,
-                throw=False,
-            )
-            R = sol_iter.ys[0][-1]
-            M_s = sol_iter.ys[1][-1]
-            nu_s = sol_iter.ys[2][-1]
-            psi_s = sol_iter.ys[3][-1]
-            phi_s = sol_iter.ys[4][-1]
-
-            nu_s_prime = 2 * M_s / (R * (R - 2.0 * M_s)) + R * jnp.power(psi_s, 2)
-
-            front = (
-                2 * psi_s / jnp.sqrt(jnp.power(nu_s_prime, 2) + 4 * jnp.power(psi_s, 2) + 1e-25)
-            )
-            inside_tanh = jnp.sqrt(
-                jnp.power(nu_s_prime, 2) + 4 * jnp.power(psi_s, 2)
-            ) / (nu_s_prime + 2 / R + 1e-25)
-            
-            inside_tanh_safe = jnp.clip(inside_tanh, -0.999999, 0.999999)
-            phi_inf = phi_s + front * jnp.arctanh(inside_tanh_safe)
-
-            return jnp.array([phi_inf - phi_inf_target]), (R, M_s)
-
         def step_func(state, _):
-            i, phi0_val, R_prev, M_prev, phi_inf_prev, prev_x, prev_F = state
+            i, phi0_val, R_prev, M_prev, phi_inf_prev, prev_x, prev_F, prev_ok = state
 
             # Mask array to inject NaN if tolerance is fulfilled
             is_converged = jnp.abs(phi_inf_prev) < tol
             phi0_for_ode = jnp.where(is_converged, jnp.nan, phi0_val)
 
             x_curr_ode = jnp.array([phi0_for_ode])
-            F_ode, (R_ode, M_ode) = forward_solver(x_curr_ode)
+            F_ode, (R_ode, M_ode), surface_ok = forward_solver(x_curr_ode)
 
             # Restore correct values if already converged
             F_curr = jnp.where(is_converged, jnp.array([phi_inf_prev]), F_ode)
@@ -397,11 +478,12 @@ def _compiled_tov_solve(
             new_prev_x = jnp.where(is_converged, prev_x, new_prev_x_calc)
             new_prev_F = jnp.where(is_converged, prev_F, new_prev_F_calc)
 
-            return (i + 1, x_next_val[0], R, M, F_curr[0], new_prev_x, new_prev_F), None
+            surface_ok = jnp.where(is_converged, prev_ok, surface_ok)
+            return (i + 1, x_next_val[0], R, M, F_curr[0], new_prev_x, new_prev_F, surface_ok), None
 
         def phase_loop(loop_state):
             def cond(cond_state):
-                i, _, _, _, phi_inf_val, _, _ = cond_state
+                i, _, _, _, phi_inf_val, _, _, _ = cond_state
                 return (i < max_iterations) & (jnp.abs(phi_inf_val) >= tol)
 
             return lax.while_loop(
@@ -412,10 +494,23 @@ def _compiled_tov_solve(
 
     # Directly evaluate the single phi0 guess
     state = run_iteration(phi0_guess)
-    i_final, phi0_final, R_final, M_inf_final, phi_inf_final, prev_x_final, prev_F_final = state
-    
-    is_phys = (i_final < max_iterations) & (M_inf_final / utils.solar_mass_in_meter < 20.0)
-    returnNAN = ~is_phys
+    i_final, _, R_final, M_inf_final, phi_inf_final, prev_x_final, _, surface_ok = state
+    # prev_x is the phi actually integrated; the other phi is the next proposal.
+    phi0_final = prev_x_final[0]
+    background_ok = surface_ok & (i_final <= max_iterations)
+    background_ok &= jnp.abs(phi_inf_final) < tol
+    background_ok &= jnp.isfinite(phi0_final)
+    (
+        phi0_final, R_final, M_inf_final, phi_inf_final, background_ok
+    ) = lax.cond(
+        background_ok,
+        lambda _: (phi0_final, R_final, M_inf_final, phi_inf_final, background_ok),
+        lambda _: _recover_background(forward_solver, ~background_ok),
+        operand=None,
+    )
+    # Failed lanes must also skip the final ODEs when cond is batched by vmap.
+    phi0_final = jnp.where(background_ok, phi0_final, jnp.nan)
+    returnNAN = ~background_ok
 
     def compute_success_branch(_):
         
@@ -433,7 +528,7 @@ def _compiled_tov_solve(
             )
 
             def solve_single(y0):
-                M_limit = 5 * utils.solar_mass_in_meter
+                M_limit = 7.0 * utils.solar_mass_in_meter
                 is_nan = jnp.isnan(y0[4])
                 m0_eff = jnp.where(is_nan, M_limit + 10.0, y0[1])
                 t0_eff = jnp.where(is_nan, 0.0, h0)
@@ -452,12 +547,17 @@ def _compiled_tov_solve(
                     args=eos_dict,
                     saveat=SaveAt(t1=True),
                     stepsize_controller=PIDController(rtol=1e-5, atol=1e-6),
-                    event=Event(tidal_mass_event), # INI YANG KELUPAAN BANG!
-                    max_steps=1000, # BATESIN BIAR GA LARI TERUS
+                    event=Event(tidal_mass_event),
+                    max_steps=1000,
                     throw=False,
                 )
 
             sol_batched = jax.vmap(solve_single)(y0_batched)
+            tidal_ok = jnp.all(sol_batched.result._value == 0)
+            tidal_ok &= jnp.all(sol_batched.ts[:, -1] == 0)
+            tidal_ok &= jnp.all(jnp.stack([
+                jnp.all(jnp.isfinite(value)) for value in sol_batched.ys
+            ]))
 
             M_s_final = sol_batched.ys[1][0, -1]
             psi_s_final = sol_batched.ys[3][0, -1]
@@ -550,7 +650,7 @@ def _compiled_tov_solve(
                 * jnp.power(M_inf_final, -5.0)
             )
 
-            return (
+            values = (
                 M_inf_jordan,
                 R_jordan,
                 Lambda_T_J,
@@ -559,6 +659,9 @@ def _compiled_tov_solve(
                 Lambda_ST2_J,
                 q
             )
+            tidal_ok &= jnp.all(jnp.isfinite(jnp.array(values)))
+            tidal_ok &= (M_inf_jordan > 0) & (R_jordan > 0)
+            return tuple(jnp.where(tidal_ok, value, jnp.nan) for value in values)
 
         def compute_no_tidal(_):
             M_limit = 20.0 * utils.solar_mass_in_meter
@@ -592,7 +695,7 @@ def _compiled_tov_solve(
             R_jordan = A_phi_s * R_final
             M_inf_jordan = (1 / A_phi_inf) * (M_inf_final + (beta_ST * phi_inf_target * (-q * M_inf_final)))
 
-            return (
+            values = (
                 M_inf_jordan,
                 R_jordan,
                 jnp.nan,
@@ -601,6 +704,11 @@ def _compiled_tov_solve(
                 jnp.nan,
                 q
             )
+            surface_ok = (sol.result._value == 0) & (sol.ts[-1] == 0)
+            surface_ok &= jnp.all(jnp.isfinite(jnp.array([
+                M_inf_jordan, R_jordan, q,
+            ]))) & (M_inf_jordan > 0) & (R_jordan > 0)
+            return tuple(jnp.where(surface_ok, value, jnp.nan) for value in values)
 
         (
             M_inf_jordan, R_jordan, Lambda_T_J, Lambda_S_J, Lambda_ST1_J, Lambda_ST2_J, q
@@ -626,6 +734,9 @@ class ScalarTensorTOVSolver(TOVSolverBase):
     The solution requires iterative solving to match boundary conditions
     at the star surface and spatial infinity.
 
+    Uses 12 fast shooting iterations followed by masked grid/bracket recovery
+    for unresolved points. Any final integration failure invalidates the family.
+
     Implements the scalar-tensor TOV equations with tidal deformability
     following Creci et al. (2023) Phys.Rev.D 111 (2025) 8, 089901 (erratum).
     """
@@ -639,7 +750,7 @@ class ScalarTensorTOVSolver(TOVSolverBase):
         beta_ST = tov_params.get("beta_ST", 0.0)
         phi_inf_target = tov_params.get("phi_inf_tgt", 1e-3)
         phi0 = tov_params.get("phi_c", 1.0)
-        max_iterations = 100
+        max_iterations = 12
 
         (
             M_inf_jordan,
@@ -683,6 +794,27 @@ class ScalarTensorTOVSolver(TOVSolverBase):
 
     def get_required_parameters(self) -> list[str]:
         return ["beta_ST", "phi_inf_tgt", "phi_c"]
+
+    def _create_family_data(self, pcs, masses, radii, k2s, ndat, extra=None):
+        """Reject the whole ST family after any final raw or processed failure."""
+        valid = jnp.all(jnp.isfinite(masses) & (masses > 0))
+        valid &= jnp.all(jnp.isfinite(radii) & (radii > 0))
+        if self.calculate_tidal:
+            valid &= jnp.all(jnp.isfinite(k2s))
+            if extra is not None:
+                valid &= jnp.all(jnp.stack([
+                    jnp.all(jnp.isfinite(value)) for value in extra.values()
+                ]))
+        family = super()._create_family_data(pcs, masses, radii, k2s, ndat, extra)
+        valid &= jnp.all(jnp.isfinite(family.masses) & (family.masses > 0))
+        valid &= jnp.all(jnp.isfinite(family.radii) & (family.radii > 0))
+        if self.calculate_tidal:
+            valid &= jnp.all(jnp.isfinite(family.lambdas))
+            if family.extra is not None:
+                valid &= jnp.all(jnp.stack([
+                    jnp.all(jnp.isfinite(value)) for value in family.extra.values()
+                ]))
+        return jax.tree.map(lambda value: jnp.where(valid, value, jnp.nan), family)
 
     def get_family_extra_keys(self) -> list[str]:
         """Return scalar--tensor observables produced for each family point."""
