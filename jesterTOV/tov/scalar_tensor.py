@@ -500,12 +500,16 @@ def _compiled_tov_solve(
     background_ok = surface_ok & (i_final <= max_iterations)
     background_ok &= jnp.abs(phi_inf_final) < tol
     background_ok &= jnp.isfinite(phi0_final)
+    # Only the last evaluated trial decides eligibility: an intermediate cutoff
+    # may still be followed by a valid trial during the fast iterations.
+    hit_mass_cutoff = M_inf_final > 7.0 * utils.solar_mass_in_meter
+    needs_recovery = ~background_ok & ~hit_mass_cutoff
     (
         phi0_final, R_final, M_inf_final, phi_inf_final, background_ok
     ) = lax.cond(
-        background_ok,
+        needs_recovery,
+        lambda _: _recover_background(forward_solver, needs_recovery),
         lambda _: (phi0_final, R_final, M_inf_final, phi_inf_final, background_ok),
-        lambda _: _recover_background(forward_solver, ~background_ok),
         operand=None,
     )
     # Failed lanes must also skip the final ODEs when cond is batched by vmap.
