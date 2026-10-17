@@ -10,26 +10,280 @@ import pytest
 
 from jesterTOV.tov.base import TOVSolverBase
 from jesterTOV.tov.data_classes import FamilyData
-from jesterTOV.tov.scalar_tensor import ScalarTensorTOVSolver, _recover_background
+from jesterTOV.tov.scalar_tensor import (
+    ScalarTensorTOVSolver,
+    _correct_background_local,
+    _recover_background,
+)
 from jesterTOV.tov import scalar_tensor
+
+
+@pytest.mark.parametrize("slope", [1.5, 13.2, 156.9, -20.0])
+@pytest.mark.parametrize("seed", [0.28, 0.31004, 0.34])
+def test_local_corrector_handles_residual_slopes(slope, seed):
+    def forward(params, accurate=False):
+        phi = params[0]
+        return jnp.array([slope * (phi - 0.31)]), (12000.0, 2000.0), jnp.isfinite(phi)
+
+    state = jax.jit(lambda: _correct_background_local(forward, seed, 15, 1e-4))()
+    assert state[-1]
+    assert abs(state[4]) < 1e-4
+    assert state[0] <= 15
+    np.testing.assert_allclose(state[4], slope * (state[5][0] - 0.31))
+
+
+def test_local_corrector_keeps_converged_lanes_frozen():
+    def solve(seed):
+        def forward(params, accurate=False):
+            phi = params[0]
+            return (
+                jnp.array([100.0 * (phi - 0.31)]),
+                (12000.0, 2000.0),
+                jnp.isfinite(phi),
+            )
+
+        return _correct_background_local(forward, seed, 15, 1e-4)
+
+    state = jax.jit(jax.vmap(solve))(jnp.array([0.31, 0.31004]))
+    assert state[0][0] == 1
+    assert state[0][1] > 1
+    np.testing.assert_allclose(state[5][0], [0.31])
+    assert np.all(state[-1])
+    assert np.all(np.abs(state[4]) < 1e-4)
+
+
+@pytest.mark.parametrize("failure", ["invalid", "worse"])
+def test_local_corrector_finds_root_beyond_numerical_hole(failure):
+    history = []
+
+    def forward(params, accurate=False):
+        phi = params[0]
+        jax.debug.callback(lambda x: history.append(float(x)), phi)
+        if failure == "invalid":
+            bad = (phi > 0.3001) & (phi < 0.30035)
+            residual = jnp.where(bad, jnp.nan, phi - 0.31)
+        else:
+            bad = (phi > 0.307) & (phi < 0.309)
+            residual = jnp.where(bad, 0.02, phi - 0.31)
+        valid = jnp.isfinite(phi) & ~(bad & (failure == "invalid"))
+        return jnp.array([residual]), (12000.0, 2000.0), valid
+
+    state = jax.jit(lambda: _correct_background_local(forward, 0.3, 15, 1e-4))()
+    jax.block_until_ready(state)
+    assert state[-1] and abs(state[4]) < 1e-4
+    assert state[0] == len(history) <= 15
+    np.testing.assert_allclose(state[5], [0.31], atol=1e-4)
+
+
+def test_local_corrector_retreats_locally_from_invalid_nn_seed():
+    history = []
+
+    def forward(params, accurate=False):
+        phi = params[0]
+        jax.debug.callback(lambda x: history.append(float(x)), phi)
+        return (
+            jnp.array([phi - 0.31]),
+            (12000.0, 2000.0),
+            jnp.isfinite(phi) & (phi < 0.33),
+        )
+
+    state = jax.jit(lambda: _correct_background_local(forward, 0.335, 15, 1e-4))()
+    jax.block_until_ready(state)
+    assert state[-1] and abs(state[4]) < 1e-4
+    np.testing.assert_allclose(history[:2], [0.335, 0.335 * 0.98])
+
+
+def test_local_corrector_preserves_terminal_cutoff_trial():
+    mass = 7.0 * scalar_tensor.utils.solar_mass_in_meter + 1.0
+
+    def forward(params, accurate=False):
+        return jnp.array([1e-5]), (12000.0, mass), jnp.array(False)
+
+    state = jax.jit(lambda: _correct_background_local(forward, 0.3, 15, 1e-4))()
+    assert state[0] == 1
+    assert not state[-1]
+    assert state[3] == mass
+    assert state[5][0] == 0.3
+
+
+def test_local_corrector_does_not_repeat_identical_failed_trial():
+    history = []
+
+    def forward(params, accurate=False):
+        jax.debug.callback(lambda x: history.append(float(x)), params[0])
+        return jnp.array([jnp.nan]), (12000.0, 2000.0), jnp.array(False)
+
+    state = jax.jit(lambda: _correct_background_local(forward, 0.3, 15, 1e-4))()
+    jax.block_until_ready(state)
+    assert state[0] == len(history) == 8
+    assert len(set(history)) == len(history)
+    assert not state[-1]
+
+
+def test_local_corrector_keeps_searching_after_intermediate_cutoff():
+    cutoff = 7.0 * scalar_tensor.utils.solar_mass_in_meter
+
+    def forward(params, accurate=False):
+        phi = params[0]
+        hit_cutoff = phi >= 0.33
+        return (
+            jnp.array([phi - 0.31]),
+            (12000.0, jnp.where(hit_cutoff, cutoff + 1.0, 2000.0)),
+            jnp.isfinite(phi) & ~hit_cutoff,
+        )
+
+    state = jax.jit(lambda: _correct_background_local(forward, 0.335, 15, 1e-4))()
+    assert state[-1] and abs(state[4]) < 1e-4
+    assert state[3] < cutoff
+
+
+def test_local_corrector_does_not_early_reject_repeated_cutoff():
+    cutoff = 7.0 * scalar_tensor.utils.solar_mass_in_meter
+
+    def forward(params, accurate=False):
+        return jnp.array([0.1]), (12000.0, cutoff + 1.0), jnp.array(False)
+
+    state = jax.jit(lambda: _correct_background_local(forward, 0.3, 15, 1e-4))()
+    assert state[0] == 15
+    assert not state[-1]
+    assert state[3] > cutoff
+
+
+def _stagnating_forward(history, fail_accurate=False):
+    def forward(params, accurate=False):
+        phi = params[0]
+        jax.debug.callback(
+            lambda x, a: history.append((float(x), bool(a))), phi, accurate
+        )
+        # Coarse numerical sign jump makes a false bracket near 0.30998.
+        # The tighter residual resolves the smooth root at 0.31 instead.
+        coarse = 100.0 * (phi - 0.30998) + jnp.copysign(3e-4, phi - 0.30998)
+        smooth = 100.0 * (phi - 0.31)
+        coarse = jnp.where(jnp.abs(phi - 0.31) < 1e-6, smooth, coarse)
+        residual = jnp.where(accurate, smooth, coarse)
+        valid = jnp.isfinite(phi) & ~(jnp.asarray(fail_accurate) & accurate)
+        return jnp.array([residual]), (12000.0 + phi, 2000.0 + phi), valid
+
+    return forward
+
+
+@pytest.mark.parametrize("budget", [9, 15])
+def test_local_corrector_accuracy_burst_is_temporary_and_counted(budget):
+    history = []
+    forward = _stagnating_forward(history)
+    state = jax.jit(lambda: _correct_background_local(forward, 0.3, budget, 1e-4))()
+    jax.block_until_ready(state)
+    modes = np.array([accurate for _, accurate in history])
+    fine = np.flatnonzero(modes)
+    assert len(fine) > 0
+    assert len(fine) <= 2
+    assert np.all(np.diff(fine) == 1)
+    assert state[0] == len(history) <= budget
+    if budget == 15:
+        assert state[-1] and abs(state[4]) < 1e-4
+        assert not modes[-1]  # Actual return to ordinary accuracy.
+        assert len(fine) == 2
+    # All returned fields describe the same last actually evaluated phi.
+    np.testing.assert_allclose(state[5], [history[-1][0]])
+    np.testing.assert_allclose(state[2], 12000.0 + history[-1][0])
+    np.testing.assert_allclose(state[3], 2000.0 + history[-1][0])
+
+
+def test_failed_accurate_probe_returns_to_ordinary_without_repeating_burst():
+    history = []
+    forward = _stagnating_forward(history, fail_accurate=True)
+    state = jax.jit(lambda: _correct_background_local(forward, 0.3, 15, 1e-4))()
+    jax.block_until_ready(state)
+    modes = np.array([accurate for _, accurate in history])
+    assert modes.sum() == 1
+    assert not modes[-1]
+    assert state[0] <= 15
+
+
+def test_already_converged_nn_needs_no_probe_or_accuracy_burst():
+    history = []
+
+    def forward(params, accurate=False):
+        jax.debug.callback(lambda a: history.append(bool(a)), accurate)
+        return jnp.array([0.0]), (12000.0, 2000.0), jnp.array(True)
+
+    state = jax.jit(lambda: _correct_background_local(forward, 0.31, 15, 1e-4))()
+    jax.block_until_ready(state)
+    assert state[0] == 1
+    assert history == [False]
+
+
+def test_one_sided_residuals_do_not_trigger_accuracy_burst():
+    modes = []
+
+    def forward(params, accurate=False):
+        jax.debug.callback(lambda a: modes.append(bool(a)), accurate)
+        return jnp.array([-0.01]), (12000.0, 2000.0), jnp.isfinite(params[0])
+
+    state = jax.jit(lambda: _correct_background_local(forward, 0.3, 15, 1e-4))()
+    jax.block_until_ready(state)
+    assert state[0] == 15
+    assert not state[-1] or abs(state[4]) >= 1e-4
+    assert not any(modes)
+
+
+def test_converged_lane_is_masked_while_another_lane_uses_accuracy_burst():
+    history = []
+
+    def solve(seed):
+        def forward(params, accurate=False):
+            phi = params[0]
+            jax.debug.callback(
+                lambda s, x, a: history.append((float(s), float(x), bool(a))),
+                seed,
+                phi,
+                accurate,
+            )
+            coarse = 100.0 * (phi - 0.30998) + jnp.copysign(3e-4, phi - 0.30998)
+            smooth = 100.0 * (phi - 0.31)
+            coarse = jnp.where(jnp.abs(phi - 0.31) < 1e-6, smooth, coarse)
+            return (
+                jnp.array([jnp.where(accurate, smooth, coarse)]),
+                (12000.0, 2000.0),
+                jnp.isfinite(phi),
+            )
+
+        return _correct_background_local(forward, seed, 15, 1e-4)
+
+    state = jax.jit(jax.vmap(solve))(jnp.array([0.31, 0.3]))
+    jax.block_until_ready(state)
+    assert state[0][0] == 1
+    assert np.all(state[-1]) and np.all(np.abs(state[4]) < 1e-4)
+    physical_first = [r for r in history if r[0] == 0.31 and np.isfinite(r[1])]
+    assert physical_first == [(0.31, 0.31, False)]
+    assert any(r[2] for r in history if r[0] == 0.3 and np.isfinite(r[1]))
 
 
 def test_recovery_routing_uses_last_trial_and_masks_cutoff_lanes():
     # Exercise the actual routing block without compiling the expensive ODEs.
-    source = ast.parse(inspect.getsource(inspect.unwrap(scalar_tensor._compiled_tov_solve)))
+    source = ast.parse(
+        inspect.getsource(inspect.unwrap(scalar_tensor._compiled_tov_solve))
+    )
     body = source.body[0].body
-    start = next(i for i, node in enumerate(body)
-                 if isinstance(node, ast.Assign)
-                 and isinstance(node.targets[0], ast.Name)
-                 and node.targets[0].id == "state")
-    end = next(i for i, node in enumerate(body)
-               if isinstance(node, ast.Assign)
-               and isinstance(node.targets[0], ast.Name)
-               and node.targets[0].id == "returnNAN")
+    start = next(
+        i
+        for i, node in enumerate(body)
+        if isinstance(node, ast.Assign)
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == "state"
+    )
+    end = next(
+        i
+        for i, node in enumerate(body)
+        if isinstance(node, ast.Assign)
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == "returnNAN"
+    )
     wrapper = ast.parse("def route(trial):\n    pass").body[0]
-    wrapper.body = body[start:end + 1] + ast.parse(
-        "return phi0_final, M_inf_final, background_ok"
-    ).body
+    wrapper.body = (
+        body[start : end + 1]
+        + ast.parse("return phi0_final, M_inf_final, background_ok").body
+    )
     wrapper.body[0] = ast.parse("state = make_state(trial)").body[0]
     module = ast.fix_missing_locations(ast.Module(body=[wrapper], type_ignores=[]))
 
@@ -38,25 +292,34 @@ def test_recovery_routing_uses_last_trial_and_masks_cutoff_lanes():
         # NaN sentinels and any earlier cutoff hits.
         mass, residual, surface_ok, iterations = trial
         surface_ok = surface_ok.astype(bool)
-        return iterations, 0.3, 12000., mass, residual, jnp.array([0.3]), jnp.array([residual]), surface_ok
+        return (
+            iterations,
+            0.3,
+            12000.0,
+            mass,
+            residual,
+            jnp.array([0.3]),
+            jnp.array([residual]),
+            surface_ok,
+        )
 
     def recover(_, active):
-        return jnp.where(active, 0.4, jnp.nan), 13000., 2000., 0., active
+        return jnp.where(active, 0.4, jnp.nan), 13000.0, 2000.0, 0.0, active
 
     # Build the wrapper's globals explicitly; only the routing block is run.
     env = dict(vars(scalar_tensor), make_state=final_state,
-               max_iterations=12, tol=1e-4, forward_solver=None,
+               max_iterations=15, tol=1e-4, forward_solver=None,
                _recover_background=recover)
     exec(compile(module, "<ST recovery routing>", "exec"), env)
 
     cutoff = 7.0 * scalar_tensor.utils.solar_mass_in_meter
     trials = jnp.array([
         [cutoff + 1., 1e-5, False, 6],   # cutoff despite small residual
-        [cutoff + 1., 0.1, False, 12],   # cutoff at iteration limit
-        [2000., 0.1, True, 12],         # unconverged, valid surface: recover
-        [2000., 1e-5, False, 12],       # failed integration, not cutoff: recover
+        [cutoff + 1., 0.1, False, 15],   # cutoff at iteration limit
+        [2000., 0.1, True, 15],         # unconverged, valid surface: recover
+        [2000., 1e-5, False, 15],       # failed integration, not cutoff: recover
         [2000., 1e-5, True, 2],         # early success: no recovery
-        [2000., 1e-5, True, 12],        # final success, even after earlier cutoff
+        [2000., 1e-5, True, 15],        # final success, even after earlier cutoff
     ])
     phi, mass, ok = jax.jit(jax.vmap(env["route"]))(trials)
     np.testing.assert_array_equal(ok, [False, False, True, True, True, True])

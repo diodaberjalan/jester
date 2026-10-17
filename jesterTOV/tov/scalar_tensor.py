@@ -12,6 +12,7 @@ where the gravitational interaction includes both a metric tensor and a scalar f
 """
 
 import functools
+from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 from jax import lax
@@ -234,6 +235,270 @@ def _tov_ode_iter_tidal(h, y, eos):
     )
 
 
+class _BackgroundRootState(NamedTuple):
+    i: jax.Array
+    trial: jax.Array
+    radius: jax.Array
+    mass: jax.Array
+    residual: jax.Array
+    phi: jax.Array
+    valid: jax.Array
+    done: jax.Array
+    negative_phi: jax.Array
+    negative_F: jax.Array
+    have_negative: jax.Array
+    positive_phi: jax.Array
+    positive_F: jax.Array
+    have_positive: jax.Array
+    anchor: jax.Array
+    anchor_F: jax.Array
+    have_anchor: jax.Array
+    failed_lower: jax.Array
+    failed_upper: jax.Array
+    orientation: jax.Array
+    side: jax.Array
+    widths: jax.Array
+    bests: jax.Array
+    history_count: jax.Array
+    best: jax.Array
+    phase: jax.Array
+    accuracy_used: jax.Array
+    other_phi: jax.Array
+    accurate_phi: jax.Array
+    accurate_F: jax.Array
+
+
+def _correct_background_local(forward_solver, phi0_init, max_iterations, tol):
+    """Bracket an NN-seeded shooting root with one temporary accuracy burst.
+
+    Only surface-valid ordinary residuals enter the Illinois secant bracket.
+    A contracting bracket with stagnant residuals triggers at most two tighter
+    evaluations, then ordinary accuracy resumes using a corrected proposal.
+    Every evaluation counts against the same budget. Return the last actual
+    trial for the caller's unchanged cutoff/recovery decision.
+    """
+    initial = _BackgroundRootState(
+        i=jnp.int32(0),
+        trial=phi0_init,
+        radius=0.0,
+        mass=0.0,
+        residual=1e9,
+        phi=phi0_init,
+        valid=jnp.array(False),
+        done=jnp.array(False),
+        negative_phi=0.0,
+        negative_F=-1.0,
+        have_negative=jnp.array(False),
+        positive_phi=jnp.inf,
+        positive_F=1.0,
+        have_positive=jnp.array(False),
+        anchor=phi0_init,
+        anchor_F=1e9,
+        have_anchor=jnp.array(False),
+        failed_lower=0.0,
+        failed_upper=jnp.inf,
+        orientation=1.0,
+        side=jnp.int32(0),
+        widths=jnp.full((4,), jnp.inf),
+        bests=jnp.full((4,), jnp.inf),
+        history_count=jnp.int32(0),
+        best=jnp.inf,
+        phase=jnp.int32(0),
+        accuracy_used=jnp.array(False),
+        other_phi=phi0_init,
+        accurate_phi=phi0_init,
+        accurate_F=0.0,
+    )
+
+    def condition(state):
+        return (state.i < max_iterations) & ~state.done
+
+    def step(state):
+        active = (state.i < max_iterations) & ~state.done
+        trial = state.trial
+        accurate = state.phase > 0
+        # Completed lanes must skip physical work even in a vmapped while loop.
+        residual, (radius, mass), valid = forward_solver(
+            jnp.array([jnp.where(active, trial, jnp.nan)]), accurate=accurate
+        )
+        value = residual[0]
+        valid = valid & jnp.isfinite(value) & jnp.isfinite(trial) & (trial > 0)
+        at_cutoff = jnp.asarray(mass) > 7.0 * utils.solar_mass_in_meter
+        finished = (valid | at_cutoff) & (jnp.abs(value) < tol)
+        ordinary_valid = ~accurate & valid
+        negative = ordinary_valid & (value < 0)
+        positive = ordinary_valid & (value >= 0)
+
+        # Endpoints are named by residual sign, NOT by position: either slope
+        # direction is allowed. Illinois weights prevent endpoint stagnation.
+        nx = jnp.where(negative, trial, state.negative_phi)
+        px = jnp.where(positive, trial, state.positive_phi)
+        nf = jnp.where(
+            negative,
+            value,
+            jnp.where(
+                positive & (state.side == 1), 0.5 * state.negative_F, state.negative_F
+            ),
+        )
+        pf = jnp.where(
+            positive,
+            value,
+            jnp.where(
+                negative & (state.side == -1), 0.5 * state.positive_F, state.positive_F
+            ),
+        )
+        have_negative = state.have_negative | negative
+        have_positive = state.have_positive | positive
+        bracketed = have_negative & have_positive
+
+        # Failed endpoints guide domain refinement, but supply no root residual.
+        failed = ~accurate & ~valid
+        upper = jnp.where(
+            failed & (~state.have_anchor | (trial > state.anchor)),
+            jnp.minimum(state.failed_upper, trial),
+            state.failed_upper,
+        )
+        lower = jnp.where(
+            failed & state.have_anchor & (trial < state.anchor),
+            jnp.maximum(state.failed_lower, trial),
+            state.failed_lower,
+        )
+        upper = jnp.where(ordinary_valid & (trial >= upper), jnp.inf, upper)
+        lower = jnp.where(ordinary_valid & (trial <= lower), 0.0, lower)
+        anchor = jnp.where(ordinary_valid, trial, state.anchor)
+        anchor_F = jnp.where(ordinary_valid, value, state.anchor_F)
+        have_anchor = state.have_anchor | ordinary_valid
+
+        # Learn search direction on a valid unbracketed branch. With an
+        # unresolved failed boundary, refine that local domain first instead
+        # of following a spurious derivative away from the NN neighborhood.
+        dx = trial - state.anchor
+        slope = (value - state.anchor_F) / jnp.where(jnp.abs(dx) > 1e-14, dx, 1.0)
+        learn_direction = ordinary_valid & state.have_anchor & ~bracketed
+        learn_direction &= ~jnp.isfinite(upper) & (lower == 0.0)
+        learn_direction &= (
+            (jnp.abs(dx) > 1e-14) & jnp.isfinite(slope) & (jnp.abs(slope) > 1e-12)
+        )
+        orientation = jnp.where(learn_direction, jnp.sign(slope), state.orientation)
+        direction = jnp.where(have_negative, orientation, -orientation)
+        base = jnp.where(have_negative, nx, px)
+        width = jnp.maximum(1e-6, 0.02 * phi0_init) * jnp.exp2(state.i)
+        boundary = jnp.where(direction > 0, upper, lower)
+        bounded = jnp.where(direction > 0, jnp.isfinite(upper), lower > 0)
+        expanded = jnp.maximum(0.5 * base, base + direction * width)
+        search = jnp.where(bounded, 0.5 * (base + boundary), expanded)
+        restoration = phi0_init * (1.0 - jnp.minimum(0.75, 0.02 * jnp.exp2(state.i)))
+        search = jnp.where(have_anchor, search, restoration)
+        denominator = pf - nf
+        interpolation = nx - nf * (px - nx) / jnp.where(
+            denominator != 0, denominator, 1.0
+        )
+        inside = jnp.isfinite(interpolation) & (interpolation > jnp.minimum(nx, px))
+        inside &= interpolation < jnp.maximum(nx, px)
+        interpolation = jnp.where(inside, interpolation, 0.5 * (nx + px))
+        ordinary_trial = jnp.where(bracketed, interpolation, search)
+
+        # Three bracket updates: >=8x contraction but <2x residual improvement.
+        best = jnp.where(
+            ordinary_valid, jnp.minimum(state.best, jnp.abs(value)), state.best
+        )
+        record = ordinary_valid & bracketed & ~finished
+        widths = jnp.where(
+            record,
+            jnp.concatenate((state.widths[1:], jnp.array([jnp.abs(px - nx)]))),
+            state.widths,
+        )
+        bests = jnp.where(
+            record, jnp.concatenate((state.bests[1:], jnp.array([best]))), state.bests
+        )
+        history_count = state.history_count + record.astype(jnp.int32)
+        trigger = record & (history_count >= 4) & ~state.accuracy_used
+        trigger &= (widths[-1] <= widths[0] / 8.0) & (bests[-1] >= bests[0] / 2.0)
+        trigger &= state.i + 1 < max_iterations
+
+        # Accurate samples NEVER update the ordinary bracket above. Two samples
+        # estimate a direction correction; the next solve is ordinary again.
+        fine_dx = trial - state.accurate_phi
+        fine_slope = (value - state.accurate_F) / jnp.where(
+            jnp.abs(fine_dx) > 1e-16, fine_dx, 1.0
+        )
+        slope_ok = (
+            (jnp.abs(fine_dx) > 1e-16)
+            & jnp.isfinite(fine_slope)
+            & (jnp.abs(fine_slope) > 1e-12)
+        )
+        trust = 0.5 * jnp.maximum(jnp.abs(trial), 1e-4)
+        correction = jnp.clip(
+            -value / jnp.where(slope_ok, fine_slope, 1.0), -trust, trust
+        )
+        corrected = trial + correction
+        corrected = jnp.where(
+            valid & slope_ok & jnp.isfinite(corrected) & (corrected > 0),
+            corrected,
+            ordinary_trial,
+        )
+        second_accurate = (state.phase == 1) & valid
+        next_trial = jnp.where(
+            second_accurate,
+            state.other_phi,
+            jnp.where(state.phase == 2, corrected, ordinary_trial),
+        )
+        next_trial = jnp.where(trigger, trial, next_trial)
+        phase = jnp.where(trigger, 1, jnp.where(second_accurate, 2, 0)).astype(
+            jnp.int32
+        )
+        # An unchanged failed NON-cutoff trial cannot add information. Return
+        # it unresolved to recovery; never add an early mass-based rejection.
+        stalled_failure = failed & ~at_cutoff & (next_trial == trial)
+        updated = state._replace(
+            i=state.i + 1,
+            trial=next_trial,
+            radius=radius,
+            mass=mass,
+            residual=value,
+            phi=trial,
+            valid=valid,
+            done=finished | stalled_failure,
+            negative_phi=nx,
+            negative_F=nf,
+            have_negative=have_negative,
+            positive_phi=px,
+            positive_F=pf,
+            have_positive=have_positive,
+            anchor=anchor,
+            anchor_F=anchor_F,
+            have_anchor=have_anchor,
+            failed_lower=lower,
+            failed_upper=upper,
+            orientation=orientation,
+            side=jnp.where(negative, -1, jnp.where(positive, 1, state.side)),
+            widths=widths,
+            bests=bests,
+            history_count=history_count,
+            best=best,
+            phase=phase,
+            accuracy_used=state.accuracy_used | trigger,
+            other_phi=jnp.where(trigger, jnp.where(value < 0, px, nx), state.other_phi),
+            accurate_phi=jnp.where(accurate, trial, state.accurate_phi),
+            accurate_F=jnp.where(accurate, value, state.accurate_F),
+        )
+        return jax.tree.map(
+            lambda new, old: jnp.where(active, new, old), updated, state
+        )
+
+    final = lax.while_loop(condition, step, initial)
+    return (
+        final.i,
+        final.trial,
+        final.radius,
+        final.mass,
+        final.residual,
+        jnp.array([final.phi]),
+        jnp.array([final.residual]),
+        final.valid,
+    )
+
+
 def _recover_background(forward_solver, active):
     """Recover an unresolved shooting root using the tested grid and bisection.
 
@@ -313,7 +578,7 @@ def _recover_background(forward_solver, active):
 
 @functools.partial(jax.jit, static_argnames=["max_iterations", "calculate_tidal"])
 def _compiled_tov_solve(
-    pc, beta_ST, phi_inf_target, phi0, ns, ps, hs, es, dloge_dlogps, max_iterations=12, calculate_tidal=True
+    pc, beta_ST, phi_inf_target, phi0, ns, ps, hs, es, dloge_dlogps, max_iterations=15, calculate_tidal=True
 ):
     
     # Calculate log_ps_nsat
@@ -366,10 +631,9 @@ def _compiled_tov_solve(
     delta_phi_prime_center = 2.0 * r0
 
     nu0 = 0.0
-    damping = 0.5
     tol = 1e-4
 
-    def forward_solver(params):
+    def forward_solver(params, accurate=False):
         phi0_trial = params[0]
         M_limit = 7.0 * utils.solar_mass_in_meter
 
@@ -391,7 +655,10 @@ def _compiled_tov_solve(
             y0=y0,
             args=eos_dict,
             saveat=SaveAt(t1=True),
-            stepsize_controller=PIDController(rtol=1e-5, atol=1e-6),
+            stepsize_controller=PIDController(
+                rtol=jnp.where(accurate, 1e-6, 1e-5),
+                atol=jnp.where(accurate, 1e-7, 1e-6),
+            ),
             event=Event(mass_event),
             adjoint=RecursiveCheckpointAdjoint(),
             max_steps=500,
@@ -422,75 +689,7 @@ def _compiled_tov_solve(
         return residual, (R, M_s), surface_ok
 
     def run_iteration(phi0_init):
-        big = 1e9
-        init_state = (
-            jnp.array(0, dtype=jnp.int32),
-            phi0_init,
-            0.0,
-            0.0,
-            big,
-            jnp.array([phi0_init], dtype=jnp.float64),
-            jnp.array([big], dtype=jnp.float64),
-            jnp.array(False),
-        )
-
-        def step_func(state, _):
-            i, phi0_val, R_prev, M_prev, phi_inf_prev, prev_x, prev_F, prev_ok = state
-
-            # Mask array to inject NaN if tolerance is fulfilled
-            is_converged = jnp.abs(phi_inf_prev) < tol
-            phi0_for_ode = jnp.where(is_converged, jnp.nan, phi0_val)
-
-            x_curr_ode = jnp.array([phi0_for_ode])
-            F_ode, (R_ode, M_ode), surface_ok = forward_solver(x_curr_ode)
-
-            # Restore correct values if already converged
-            F_curr = jnp.where(is_converged, jnp.array([phi_inf_prev]), F_ode)
-            R = jnp.where(is_converged, R_prev, R_ode)
-            M = jnp.where(is_converged, M_prev, M_ode)
-
-            x_real = jnp.array([phi0_val])
-
-            def damped_step():
-                step = -damping * F_curr
-                x_proposed = x_real + step
-                x_next_val = jnp.where(x_proposed * x_real <= 0.0, x_real * 0.5, x_proposed)
-                return x_next_val, x_real, F_curr
-
-            def linearized_step():
-                dx = x_real - prev_x
-                dF = F_curr - prev_F
-                J = dF / (dx + 1e-12)
-                step = -0.8 * F_curr / (J + 1e-12)
-                x_proposed = x_real + jnp.clip(step, -1e6, 1e6)
-                x_next_val = jnp.where(x_proposed * x_real <= 0.0, x_real * 0.5, x_proposed)
-                return x_next_val, x_real, F_curr
-
-            x_next_calc, new_prev_x_calc, new_prev_F_calc = lax.cond(
-                i < 5,
-                lambda _: damped_step(),
-                lambda _: linearized_step(),
-                None
-            )
-
-            # Mask final state updates to freeze them after convergence
-            x_next_val = jnp.where(is_converged, x_real, x_next_calc)
-            new_prev_x = jnp.where(is_converged, prev_x, new_prev_x_calc)
-            new_prev_F = jnp.where(is_converged, prev_F, new_prev_F_calc)
-
-            surface_ok = jnp.where(is_converged, prev_ok, surface_ok)
-            return (i + 1, x_next_val[0], R, M, F_curr[0], new_prev_x, new_prev_F, surface_ok), None
-
-        def phase_loop(loop_state):
-            def cond(cond_state):
-                i, _, _, _, phi_inf_val, _, _, _ = cond_state
-                return (i < max_iterations) & (jnp.abs(phi_inf_val) >= tol)
-
-            return lax.while_loop(
-                cond, lambda s: lax.scan(step_func, s, None, 2)[0], loop_state
-            )
-
-        return phase_loop(init_state)
+        return _correct_background_local(forward_solver, phi0_init, max_iterations, tol)
 
     # Directly evaluate the single phi0 guess
     state = run_iteration(phi0_guess)
@@ -738,7 +937,8 @@ class ScalarTensorTOVSolver(TOVSolverBase):
     The solution requires iterative solving to match boundary conditions
     at the star surface and spatial infinity.
 
-    Uses 12 fast shooting iterations followed by masked grid/bracket recovery
+    Uses at most 15 fast shooting evaluations, including a temporary accuracy
+    burst of at most two evaluations, followed by masked grid/bracket recovery
     for unresolved points. Any final integration failure invalidates the family.
 
     Implements the scalar-tensor TOV equations with tidal deformability
@@ -754,7 +954,7 @@ class ScalarTensorTOVSolver(TOVSolverBase):
         beta_ST = tov_params.get("beta_ST", 0.0)
         phi_inf_target = tov_params.get("phi_inf_tgt", 1e-3)
         phi0 = tov_params.get("phi_c", 1.0)
-        max_iterations = 12
+        max_iterations = 15
 
         (
             M_inf_jordan,
