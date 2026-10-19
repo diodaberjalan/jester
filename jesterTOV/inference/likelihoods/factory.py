@@ -203,6 +203,7 @@ def create_likelihood(
                 csv_file=config.csv_file,
                 penalty_value=config.penalty_value,
                 N_masses_evaluation=config.N_masses_evaluation,
+                observation_batch_size=config.observation_batch_size,
             )
 
         case MockLambdaLikelihoodConfig():
@@ -210,6 +211,7 @@ def create_likelihood(
                 csv_file=config.csv_file,
                 penalty_value=config.penalty_value,
                 N_masses_evaluation=config.N_masses_evaluation,
+                observation_batch_size=config.observation_batch_size,
             )
 
         case MaxMassBoundsLikelihoodConfig():

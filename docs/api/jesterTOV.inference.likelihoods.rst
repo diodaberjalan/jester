@@ -23,6 +23,15 @@ X-ray Timing Likelihoods
    nicer.NICERLikelihood
    nicer.NICERKDELikelihood
 
+Mock Observation Likelihoods
+----------------------------
+
+.. autosummary::
+   :toctree: _autosummary
+
+   nicer.MockMRLikelihood
+   gw.MockLambdaLikelihood
+
 Radio Pulsar Likelihoods
 -------------------------
 

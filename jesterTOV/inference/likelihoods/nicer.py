@@ -17,6 +17,7 @@ from jaxtyping import Array, Float
 from jax.scipy.special import logsumexp
 
 from jesterTOV.inference.base.likelihood import LikelihoodBase
+from jesterTOV.inference.likelihoods._mock_quadrature import MockMRQuadrature
 from jesterTOV.logging_config import get_logger
 import jesterTOV.utils as utils
 import pandas as pd
@@ -579,6 +580,14 @@ class NICERKDELikelihood(LikelihoodBase):
 
 
 class MockMRLikelihood(LikelihoodBase):
+    """Analytic mock M-R densities integrated in bounded observation blocks.
+
+    ``observation_batch_size`` defaults to 16 and controls temporary memory
+    without changing the mass grid or the observations included. Streaming
+    changes floating-point summation order, so results need not be bitwise
+    identical to a fully vectorized evaluation.
+    """
+
     def __init__(
         self,
         csv_file: str,
@@ -588,6 +597,7 @@ class MockMRLikelihood(LikelihoodBase):
         std_col: tuple = ("Std_Mass", "Std_Radius"),
         skew_col: tuple = ("Skew_Mass", "Skew_Radius"),
         y_key: str = "radii_EOS",
+        observation_batch_size: int = 16,
     ) -> None:
         super().__init__()
         self.penalty_value = penalty_value
@@ -614,72 +624,14 @@ class MockMRLikelihood(LikelihoodBase):
         self.log_det_covs = jnp.linalg.slogdet(self.covs)[1]
         self.omegas = jnp.sqrt(jnp.diagonal(self.covs, axis1=1, axis2=2))
         self.alpha_primes = self.skews / self.omegas
+        self.observation_batch_size = observation_batch_size
+        self._quadrature = MockMRQuadrature(self, observation_batch_size)
 
     def evaluate(self, params: dict) -> float:
-        masses_EOS = params["masses_EOS"]
-        y_EOS = params[self.y_key]
-        
-        valid_mask = jnp.isfinite(masses_EOS) & jnp.isfinite(y_EOS)
-        mtov = jnp.max(jnp.where(valid_mask, masses_EOS, self.penalty_value))
+        """Evaluate the unchanged quadrature using bounded observation blocks."""
+        return self._quadrature.evaluate(params)
 
-        split_idx = utils.get_MR_split_index(masses_EOS, y_EOS)
-        idx = jnp.arange(masses_EOS.shape[0])
-        mask1 = (idx < split_idx) & valid_mask
-        mask2 = (idx >= split_idx) & valid_mask
 
-        SENTINEL = 1e30
-
-        m_eos_1 = jnp.where(mask1, masses_EOS, SENTINEL)
-        y_eos_1 = jnp.where(mask1, y_EOS, 0.0)
-        sort_1 = jnp.argsort(m_eos_1)
-        m_eos_1, y_eos_1 = m_eos_1[sort_1], y_eos_1[sort_1]
-        
-        seg1_min = m_eos_1[0]
-        seg1_max = jnp.max(jnp.where(m_eos_1 == SENTINEL, self.penalty_value, m_eos_1))
-
-        m_eos_2 = jnp.where(mask2, masses_EOS, SENTINEL)
-        y_eos_2 = jnp.where(mask2, y_EOS, 0.0)
-        sort_2 = jnp.argsort(m_eos_2)
-        m_eos_2, y_eos_2 = m_eos_2[sort_2], y_eos_2[sort_2]
-        
-        seg2_min = m_eos_2[0]
-        seg2_max = jnp.max(jnp.where(m_eos_2 == SENTINEL, self.penalty_value, m_eos_2))
-
-        m_grid = jnp.linspace(0.1, 3.5, self.N_masses_evaluation)
-        dm = m_grid[1] - m_grid[0]
-
-        def compute_log_prob_segment(m_eos_safe, y_eos_safe, seg_min, seg_max):
-            m_eos_safe = m_eos_safe + jnp.arange(m_eos_safe.shape[0]) * 1e-12
-            y_grid = jnp.interp(m_grid, m_eos_safe, y_eos_safe)
-            
-            xy_points = jnp.stack([m_grid, y_grid], axis=-1)
-            diff = xy_points[None, :, :] - self.centers[:, None, :]
-            diff_transformed = jnp.einsum("kij,knj->kni", self.inv_covs, diff)
-            quad_form = jnp.sum(diff * diff_transformed, axis=-1)
-            
-            log_norm = -0.5 * (self.log_det_covs[:, None] + quad_form + 2 * jnp.log(2 * jnp.pi))
-            skew_arg = jnp.sum(self.alpha_primes[:, None, :] * diff, axis=-1)
-            log_skew = jnp.log(2.0) + norm.logcdf(skew_arg)
-            
-            log_prob = log_norm + log_skew
-            
-            in_segment = (m_grid >= seg_min) & (m_grid <= seg_max)
-            log_prob = jnp.where(in_segment[None, :], log_prob, self.penalty_value)
-            penalty = jnp.where(m_grid > mtov, self.penalty_value, 0.0)
-            log_prob = log_prob + penalty[None, :]
-            return log_prob
-
-        log_prob_seg1 = compute_log_prob_segment(m_eos_1, y_eos_1, seg1_min, seg1_max)
-        log_prob_seg2 = compute_log_prob_segment(m_eos_2, y_eos_2, seg2_min, seg2_max)
-        
-        log_prob_combined = jnp.logaddexp(log_prob_seg1, log_prob_seg2)
-        logL_individuals = logsumexp(log_prob_combined, axis=1) + jnp.log(dm)
-        
-        total_log_likelihood = jnp.sum(logL_individuals)
-
-        return total_log_likelihood
-
-        
 class MockMRLikelihood_old(LikelihoodBase):
     """
     Mock MR Likelihood evaluating deterministic skewed correlated posteriors.

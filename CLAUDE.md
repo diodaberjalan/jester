@@ -212,6 +212,12 @@ value = array.item()  # type: ignore[union-attr]
 - Unit conversions (geometric ↔ physical units)
 - Utility functions
 
+Mock M-R and paired tidal likelihoods stream observation blocks through
+`inference/likelihoods/_mock_quadrature.py`. Their
+`observation_batch_size` option defaults to 16 and bounds likelihood
+temporaries under particle batching without changing quadrature or
+precision. See the YAML reference and inference architecture notes.
+
 ### Key Design Principles
 - **JAX-first**: Hardware acceleration with automatic differentiation
   - Avoid Python `if` statements on traced values (use `jnp.where()`)

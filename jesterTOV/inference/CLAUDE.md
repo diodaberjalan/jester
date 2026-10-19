@@ -61,6 +61,17 @@ When a user asks to change a default value (e.g. `penalty_value`), update **all*
 
 The factory (`likelihoods/factory.py`) passes `config.<field>` through, so no change needed there.
 
+### Mock likelihood memory
+
+`MockMRLikelihood` and `MockLambdaLikelihood` use shared streaming
+quadrature in `likelihoods/_mock_quadrature.py`. The schema and factory
+expose `observation_batch_size` (default 16); tidal blocks count the two
+component observations per binary separately. Keep the original grids,
+weights, masks and penalties when changing this code. Results agree
+numerically but need not be bitwise identical because reduction order
+changes. This bounds likelihood workspaces under particle `vmap`; it
+does not control stellar-solver or SMC memory.
+
 ### Inference Documentation
 - `docs/inference_index.md` - Navigation hub
 - `docs/inference_quickstart.md` - Quick start guide
@@ -107,6 +118,7 @@ jesterTOV/inference/
 │   ├── chieft.py        # Chiral EFT low-density constraints
 │   ├── rex.py           # PREX/CREX neutron skin experiments
 │   ├── constraints.py   # Physical constraints (EOS/TOV/Gamma)
+│   ├── _mock_quadrature.py # Bounded-memory analytic mock-density integration
 │   ├── combined.py      # CombinedLikelihood wrapper
 │   └── factory.py       # Likelihood creation from config
 ├── data/                # Data loading and preprocessing

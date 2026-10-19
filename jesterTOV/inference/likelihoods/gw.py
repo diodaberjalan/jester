@@ -6,12 +6,11 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 from jax.scipy.special import logsumexp
-from jax.scipy.stats import norm
 
 from jesterTOV.inference.base.likelihood import LikelihoodBase
+from jesterTOV.inference.likelihoods._mock_quadrature import MockLambdaQuadrature
 from jesterTOV.inference.flows.flow import Flow
 from jesterTOV.logging_config import get_logger
-import jesterTOV.utils as utils
 
 logger = get_logger("jester")
 
@@ -362,6 +361,12 @@ class MockLambdaLikelihood(LikelihoodBase):
     Reads a paired CSV (m1, m2, l1, l2), treats the diagonal covariance
     matrices efficiently by separating them into 2K independent 1D integrals,
     and sums the log-likelihoods correctly.
+
+    ``observation_batch_size`` defaults to 16 effective component observations
+    per block. It bounds interpolation and density workspaces without changing
+    the component-specific integration grids or trapezoidal weights. Streaming
+    changes floating-point summation order, so results need not be bitwise
+    identical to a fully vectorized evaluation.
     """
     def __init__(
         self,
@@ -369,6 +374,7 @@ class MockLambdaLikelihood(LikelihoodBase):
         penalty_value: float = -1e10,
         N_masses_evaluation: int = 200,
         integration_sigma_cut: float = 8.0,
+        observation_batch_size: int = 16,
     ) -> None:
         super().__init__()
         self.penalty_value = penalty_value
@@ -408,80 +414,9 @@ class MockLambdaLikelihood(LikelihoodBase):
         self.log_det_covs = jnp.linalg.slogdet(self.covs)[1]
         self.omegas = jnp.sqrt(jnp.diagonal(self.covs, axis1=1, axis2=2))
         self.alpha_primes = self.skews / self.omegas
+        self.observation_batch_size = observation_batch_size
+        self._quadrature = MockLambdaQuadrature(self, observation_batch_size)
 
     def evaluate(self, params: dict) -> float:
-        masses_EOS = params["masses_EOS"]
-        y_EOS = params[self.y_key]
-        
-        valid_mask = jnp.isfinite(masses_EOS) & jnp.isfinite(y_EOS)
-        mtov = jnp.max(jnp.where(valid_mask, masses_EOS, self.penalty_value))
-
-        split_idx = utils.get_MR_split_index(masses_EOS, y_EOS)
-        idx = jnp.arange(masses_EOS.shape[0])
-        mask1 = (idx < split_idx) & valid_mask
-        mask2 = (idx >= split_idx) & valid_mask
-
-        SENTINEL = 1e30
-        dummy_m = jnp.linspace(1e5, 1e5 + 10.0, masses_EOS.shape[0])
-
-        m_eos_1 = jnp.where(mask1, masses_EOS, dummy_m)
-        y_eos_1 = jnp.where(mask1, y_EOS, 0.0)
-        sort_1 = jnp.argsort(m_eos_1)
-        m_eos_1, y_eos_1 = m_eos_1[sort_1], y_eos_1[sort_1]
-        
-        seg1_min = jnp.min(jnp.where(mask1, masses_EOS, SENTINEL))
-        seg1_max = jnp.max(jnp.where(mask1, masses_EOS, self.penalty_value))
-
-        m_eos_2 = jnp.where(mask2, masses_EOS, dummy_m)
-        y_eos_2 = jnp.where(mask2, y_EOS, 0.0)
-        sort_2 = jnp.argsort(m_eos_2)
-        m_eos_2, y_eos_2 = m_eos_2[sort_2], y_eos_2[sort_2]
-        
-        seg2_min = jnp.min(jnp.where(mask2, masses_EOS, SENTINEL))
-        seg2_max = jnp.max(jnp.where(mask2, masses_EOS, self.penalty_value))
-
-        def compute_log_integral_segment(m_eos_safe, y_eos_safe, seg_min, seg_max):
-            m_eos_safe = m_eos_safe + jnp.arange(m_eos_safe.shape[0]) * 1e-12
-            mass_std = self.omegas[:, 0]
-            mass_center = self.centers[:, 0]
-            window = self.integration_sigma_cut * mass_std
-
-            m_start = jnp.maximum(seg_min, mass_center - window)
-            m_stop = jnp.minimum(seg_max, mass_center + window)
-            has_support = m_stop > m_start
-
-            t_grid = jnp.linspace(0.0, 1.0, self.N_masses_evaluation)
-            m_grid = m_start[:, None] + (m_stop - m_start)[:, None] * t_grid[None, :]
-            y_grid = jnp.interp(m_grid, m_eos_safe, y_eos_safe)
-            
-            xy_points = jnp.stack([m_grid, y_grid], axis=-1)
-            diff = xy_points - self.centers[:, None, :]
-            diff_transformed = jnp.einsum("kij,knj->kni", self.inv_covs, diff)
-            quad_form = jnp.sum(diff * diff_transformed, axis=-1)
-            
-            log_norm = -0.5 * (self.log_det_covs[:, None] + quad_form + 2 * jnp.log(2 * jnp.pi))
-            skew_arg = jnp.sum(self.alpha_primes[:, None, :] * diff, axis=-1)
-            log_skew = jnp.log(2.0) + norm.logcdf(skew_arg)
-            
-            log_prob = log_norm + log_skew
-            
-            in_segment = (m_grid >= seg_min) & (m_grid <= seg_max) & has_support[:, None]
-            log_prob = jnp.where(in_segment, log_prob, self.penalty_value)
-            penalty = jnp.where(m_grid > mtov, self.penalty_value, 0.0)
-            log_prob = log_prob + penalty
-
-            dm = (m_stop - m_start) / (self.N_masses_evaluation - 1)
-            weights = jnp.ones(self.N_masses_evaluation)
-            weights = weights.at[0].set(0.5)
-            weights = weights.at[-1].set(0.5)
-            log_weights = jnp.log(dm[:, None]) + jnp.log(weights[None, :])
-            log_weights = jnp.where(has_support[:, None], log_weights, self.penalty_value)
-            return logsumexp(log_prob + log_weights, axis=1)
-
-        logL_seg1 = compute_log_integral_segment(m_eos_1, y_eos_1, seg1_min, seg1_max)
-        logL_seg2 = compute_log_integral_segment(m_eos_2, y_eos_2, seg2_min, seg2_max)
-        logL_individuals = jnp.logaddexp(logL_seg1, logL_seg2)
-        
-        total_log_likelihood = jnp.sum(logL_individuals)
-
-        return total_log_likelihood
+        """Evaluate the unchanged quadrature using bounded observation blocks."""
+        return self._quadrature.evaluate(params)

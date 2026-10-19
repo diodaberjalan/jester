@@ -796,6 +796,7 @@ class MockMRLikelihoodConfig(BaseLikelihoodConfig):
           csv_file: "./mock_data.csv"
           penalty_value: -1e10
           N_masses_evaluation: 200
+          observation_batch_size: 16
     """
 
     type: Literal["mock_mr"] = Field(
@@ -811,17 +812,22 @@ class MockMRLikelihoodConfig(BaseLikelihoodConfig):
 
     N_masses_evaluation: int = Field(
         default=200,
-        gt=0,
+        gt=1,
         description="Number of mass grid points for numerical integration",
+    )
+
+    observation_batch_size: int = Field(
+        default=16,
+        gt=0,
+        description="Observation block size controlling peak quadrature memory",
     )
 
 
 class MockLambdaLikelihoodConfig(BaseLikelihoodConfig):
     """Mock Lambda (tidal deformability) likelihood configuration for mock-data studies.
 
-    Evaluates a bivariate skew-normal likelihood against mock mass-Lambda
-    observations stored in a CSV file. Each row is an independent
-    (mass, Lambda) observation.
+    Evaluates independent Gaussian mass-Lambda component densities for mock
+    binary pairs stored in a CSV file. Each row contains both components.
 
     Examples
     --------
@@ -832,6 +838,7 @@ class MockLambdaLikelihoodConfig(BaseLikelihoodConfig):
           csv_file: "./mock_lambda_data.csv"
           penalty_value: -1e10
           N_masses_evaluation: 200
+          observation_batch_size: 16
     """
 
     type: Literal["mock_lambda"] = Field(
@@ -839,7 +846,7 @@ class MockLambdaLikelihoodConfig(BaseLikelihoodConfig):
     )
 
     csv_file: str = Field(
-        description="Path to CSV file with mock mass-Lambda observations"
+        description="Path to CSV file with paired mock mass-Lambda observations"
     )
 
     penalty_value: float = Field(
@@ -849,8 +856,14 @@ class MockLambdaLikelihoodConfig(BaseLikelihoodConfig):
 
     N_masses_evaluation: int = Field(
         default=200,
-        gt=0,
+        gt=1,
         description="Number of mass grid points for numerical integration",
+    )
+
+    observation_batch_size: int = Field(
+        default=16,
+        gt=0,
+        description="Observation block size controlling peak quadrature memory",
     )
 
 

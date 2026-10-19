@@ -472,6 +472,7 @@ against synthetic observations stored in CSV files.
   csv_file: "./mock_mr_data.csv"
   penalty_value: -1e10
   N_masses_evaluation: 200
+  observation_batch_size: 16
 ```
 
 Evaluates a bivariate skew-normal likelihood against mock (mass, radius)
@@ -485,7 +486,10 @@ observations. Each CSV row is an independent mass-radius measurement.
 - **`penalty_value`** (`float`, default: `-1e10`) - Log-likelihood penalty for
   invalid configurations.
 - **`N_masses_evaluation`** (`int`, default: `200`) - Number of mass grid points
-  for numerical integration over the mass dimension.
+  for numerical integration over the mass dimension; must be at least 2.
+- **`observation_batch_size`** (`int`, default: `16`) - Positive observation
+  block size controlling temporary memory. Smaller blocks reduce memory and
+  increase the number of sequential blocks.
 
 See {class}`~jesterTOV.inference.likelihoods.nicer.MockMRLikelihood` for the API reference.
 
@@ -501,25 +505,37 @@ See {class}`~jesterTOV.inference.likelihoods.nicer.MockMRLikelihood` for the API
   csv_file: "./mock_lambda_data.csv"
   penalty_value: -1e10
   N_masses_evaluation: 200
+  observation_batch_size: 16
 ```
 
-Evaluates a bivariate skew-normal likelihood against mock (mass, Lambda)
-observations, where Lambda is the dimensionless tidal deformability.
-Each CSV row is an independent mass-Lambda measurement (no m1/m2 pairing).
+Evaluates independent Gaussian mass-Lambda component densities for mock binary
+pairs, where Lambda is the dimensionless tidal deformability. Each CSV row
+contains two components, which are integrated on their own mass windows. The
+observation block size counts components rather than binary pairs.
 
 **Field Details:**
 
 - **`csv_file`** (`str`, required) - Path to CSV file with mock mass-Lambda
-  observations. Expected columns: `Mass_Center_Noise`, `Lambda_Center_Noise`,
-  `Std_Mass`, `Std_Lambda`, `Covariance`, `Skew_Mass`, `Skew_Lambda`.
+  binary pairs. Expected columns are `Mass1_Center_Noise`, `Lambda1_Center_Noise`,
+  `Std_Mass1`, `Std_Lambda1`, and the corresponding component-2 columns
+  `Mass2_Center_Noise`, `Lambda2_Center_Noise`, `Std_Mass2`, `Std_Lambda2`.
 - **`penalty_value`** (`float`, default: `-1e10`) - Log-likelihood penalty for
   invalid configurations.
 - **`N_masses_evaluation`** (`int`, default: `200`) - Number of mass grid points
-  for numerical integration over the mass dimension.
+  for numerical integration over the mass dimension; must be at least 2.
+- **`observation_batch_size`** (`int`, default: `16`) - Positive observation
+  block size controlling temporary memory. Smaller blocks reduce memory and
+  increase the number of sequential blocks.
 
 See {class}`~jesterTOV.inference.likelihoods.gw.MockLambdaLikelihood` for the API reference.
 
 ::::
+
+Both mock likelihoods evaluate analytic densities without KDE. Observation
+blocks preserve all observations, float64 precision, integration points and
+weights. Changing the block size can change rounding through floating-point
+summation order; bitwise identical results are not guaranteed. Existing
+configurations use blocks of 16 when this field is omitted.
 
 ### Nuclear theory constraints
 
