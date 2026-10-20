@@ -156,7 +156,32 @@ eos:
 
 The `tov` section configures the Tolman–Oppenheimer–Volkoff (TOV) equation solver used to compute neutron star structure (mass, radius, tidal deformability). For a conceptual overview of all available solvers, see {ref}`overview-tov`. The Pydantic base schema is {class}`~jesterTOV.inference.config.schema.BaseTOVConfig`.
 
-Three solver types are supported: `"gr"` (standard GR), `"anisotropy"` (phenomenological parametrizations to include pressure anisotropy), and `"scalar_tensor"` (scalar-tensor gravity). All solvers share the base fields `min_nsat_TOV`, `ndat_TOV`, and `nb_masses`; the beyond-GR solvers additionally require theory parameters that must be included in the prior file.
+Three solver types are supported: `"gr"` (standard GR), `"anisotropy"` (phenomenological parametrizations to include pressure anisotropy), and `"scalar_tensor"` (scalar-tensor gravity). All solvers share the base fields `min_nsat_TOV`, `ndat_TOV`, `nb_masses`, and `stability_branch`; the beyond-GR solvers additionally require theory parameters that must be included in the prior file.
+
+### Stability-region selection
+
+The optional `tov.stability_branch` field accepts `"default"` and `"first"`.
+Omitting it is equivalent to `"default"` and preserves existing behavior:
+the family processor detects up to four increasing-mass intervals, while MR
+and mock tidal likelihoods use their existing two-segment gap detection.
+The current GW likelihoods retain their direct mass-tidal interpolation.
+
+Set `"first"` to retain only the first interval detected in central-pressure
+order, including its maximum-mass endpoint:
+
+```yaml
+tov:
+  type: gr  # Also supported for scalar_tensor and anisotropy.
+  stability_branch: first
+```
+
+This selection applies to the family supplied to every current and future MR
+and tidal likelihood, maximum-mass constraint, and posterior stellar curve.
+`Mtov` then comes from the first region, even when a later region reaches a
+higher mass. The existing stability criterion and interpolation are reused;
+no solver-failure checks are relaxed, and all central pressures are still
+solved. A family with no usable first interval is invalid. The option does not
+remove phase transitions from the EOS itself.
 
 ### General Relativity
 

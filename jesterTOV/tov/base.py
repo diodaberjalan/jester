@@ -6,7 +6,7 @@ whether for General Relativity, modified gravity, or scalar-tensor theories.
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Literal, Optional
 import jax
 import jax.numpy as jnp
 from jaxtyping import Float, Array
@@ -95,6 +95,7 @@ class TOVSolverBase(ABC):
         ndat: int,
         min_nsat: float,
         tov_params: dict[str, float] = {},
+        stability_branch: Literal["default", "first"] = "default",
     ) -> FamilyData:
         r"""
         Construct M-R-Λ curves by solving for multiple central pressures.
@@ -109,6 +110,9 @@ class TOVSolverBase(ABC):
                      (assumed to be 0.16 :math:`\mathrm{fm}^{-3}`)
             tov_params: Solver-specific parameters returned by :meth:`fetch_params`.
                 Defaults to ``{}`` for GR; populated dict for modified-gravity solvers, anisotropy, etc.
+            stability_branch: ``default`` preserves existing bounded branch
+                selection; ``first`` retains only the first stable interval.
+                This argument must be static when compiling with JAX.
 
         Returns:
             FamilyData: Mass-radius-tidal curves in physical units
@@ -147,8 +151,19 @@ class TOVSolverBase(ABC):
         extra_fields: Optional[dict[str, Float[Array, "ndat"]]] = solutions.extra  # type: ignore[assignment]
 
         # Convert to physical units and compute tidal deformability
+        branch_options: dict[str, Literal["default", "first"]] = (
+            {"stability_branch": stability_branch}
+            if stability_branch != "default"
+            else {}
+        )
         return self._create_family_data(
-            pcs, masses, radii, k2s, ndat, extra=extra_fields
+            pcs,
+            masses,
+            radii,
+            k2s,
+            ndat,
+            extra=extra_fields,
+            **branch_options,
         )
 
     def _get_pc_min(self, eos_data: EOSData, min_nsat: float) -> Float[Array, ""]:
@@ -199,6 +214,7 @@ class TOVSolverBase(ABC):
         k2s: Float[Array, "ndat"],
         ndat: int,
         extra: Optional[dict[str, Float[Array, "ndat"]]] = None,
+        stability_branch: Literal["default", "first"] = "default",
     ) -> FamilyData:
         """
         Shared post-processing: unit conversion, compactness limits, interpolation.
@@ -211,6 +227,8 @@ class TOVSolverBase(ABC):
             ndat: Number of points for output grid
             extra: Optional dictionary of solver-specific quantities
                   (e.g., from ScalarTensorTOVSolver)
+            stability_branch: Existing bounded selection (``default``) or only
+                the first detected stable interval (``first``).
 
         Returns:
             FamilyData: Processed family curves in physical units
@@ -229,7 +247,7 @@ class TOVSolverBase(ABC):
         # on stable segments, handling multi-segment phase transitions
         pcs_lim, masses_lim, radii_lim, lambdas_lim = (
             utils.limit_by_MTOV_and_interpolate(
-                pcs, masses_solar, radii_km, lambdas, ndat
+                pcs, masses_solar, radii_km, lambdas, ndat, stability_branch
             )
         )
 
@@ -238,7 +256,7 @@ class TOVSolverBase(ABC):
         if extra is not None:
             extra_processed = jax.tree_util.tree_map(
                 lambda val: utils.limit_by_MTOV_and_interpolate(
-                    pcs, masses_solar, radii_km, val, ndat
+                    pcs, masses_solar, radii_km, val, ndat, stability_branch
                 )[
                     3
                 ],  # Take only the interpolated fourth element

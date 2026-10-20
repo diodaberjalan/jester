@@ -1,6 +1,6 @@
 r"""Unified transform for EOS parameters to neutron star observables."""
 
-from typing import Any
+from typing import Any, Literal
 
 import jax.numpy as jnp
 from jaxtyping import Array, Float
@@ -58,6 +58,9 @@ class JesterTransform(NtoMTransform):
         Number of central pressure points for M-R-Λ curves (default: 100)
     min_nsat_TOV : float
         Minimum density for TOV integration in units of nsat (default: 0.75)
+    stability_branch : Literal["default", "first"]
+        Preserve existing bounded branch selection, or retain only the first
+        stable interval for every stellar observable (default: ``default``).
     **kwargs
         Additional parameters (for compatibility)
 
@@ -104,12 +107,16 @@ class JesterTransform(NtoMTransform):
         ndat_TOV: int = 100,
         min_nsat_TOV: float = 0.75,
         fixed_params: dict[str, float] | None = None,
+        stability_branch: Literal["default", "first"] = "default",
         **kwargs: Any,  # FIXME: remove kwargs argument in a future release
     ) -> None:
         self.eos = eos
         self.tov_solver = tov_solver
         self.ndat_TOV = ndat_TOV
         self.min_nsat_TOV = min_nsat_TOV
+        if stability_branch not in ("default", "first"):
+            raise ValueError("stability_branch must be 'default' or 'first'")
+        self.stability_branch: Literal["default", "first"] = stability_branch
         if fixed_params is not None:
             self.fixed_params: dict[str, float] = fixed_params.copy()
         else:
@@ -206,6 +213,7 @@ class JesterTransform(NtoMTransform):
             ndat_TOV=tov_config.ndat_TOV,
             min_nsat_TOV=tov_config.min_nsat_TOV,
             fixed_params=fixed_params,
+            stability_branch=tov_config.stability_branch,
         )
 
     @staticmethod
@@ -370,11 +378,17 @@ class JesterTransform(NtoMTransform):
         tov_params = self.tov_solver.fetch_params(params)
 
         # Solve TOV equations to get M-R-Λ family
+        branch_options: dict[str, Literal["default", "first"]] = (
+            {"stability_branch": self.stability_branch}
+            if self.stability_branch != "default"
+            else {}
+        )
         family_data = self.tov_solver.construct_family(
             eos_data,
             ndat=self.ndat_TOV,
             min_nsat=self.min_nsat_TOV,
             tov_params=tov_params,
+            **branch_options,
         )
 
         # Create standardized return dictionary with constraint checking

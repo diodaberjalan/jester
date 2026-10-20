@@ -73,6 +73,14 @@ changes. This bounds likelihood workspaces under particle `vmap`; it
 does not control stellar-solver or SMC memory.
 
 ### Inference Documentation
+
+`tov.stability_branch` defaults to `default` and may be omitted. `first` is
+forwarded by `JesterTransform` to shared family processing, which selects only
+the first interval already identified by the existing stable-segment detector.
+All MR/tidal likelihoods, maximum-mass constraints, and derived curves consume
+that family. Do not add independent selection or reweighting in likelihoods.
+The setting is static for JAX; strict solver-failure checks remain in force.
+
 - `docs/inference_index.md` - Navigation hub
 - `docs/inference_quickstart.md` - Quick start guide
 - `docs/inference.md` - Complete reference

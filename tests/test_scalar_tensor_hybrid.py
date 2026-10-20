@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from jesterTOV.tov.base import TOVSolverBase
-from jesterTOV.tov.data_classes import FamilyData
+from jesterTOV.tov.data_classes import EOSData, FamilyData
 from jesterTOV.tov.scalar_tensor import (
     ScalarTensorTOVSolver,
     _correct_background_local,
@@ -303,13 +303,17 @@ def test_recovery_routing_uses_last_trial_and_masks_cutoff_lanes():
             surface_ok,
         )
 
-    def recover(_, active):
-        return jnp.where(active, 0.4, jnp.nan), 13000.0, 2000.0, 0.0, active
+    def recover(active, previous, forward_args):
+        return jax.tree.map(
+            lambda new, old: jnp.where(active, new, old),
+            (0.4, 13000.0, 2000.0, 0.0, active), previous,
+        )
 
     # Build the wrapper's globals explicitly; only the routing block is run.
     env = dict(vars(scalar_tensor), make_state=final_state,
                max_iterations=15, tol=1e-4, forward_solver=None,
-               _recover_background=recover)
+               h0=0., dh=0., r0=0., m0=0., eos_dict={}, phi_inf_target=.001,
+               _deferred_recovery=recover)
     exec(compile(module, "<ST recovery routing>", "exec"), env)
 
     cutoff = 7.0 * scalar_tensor.utils.solar_mass_in_meter
@@ -326,6 +330,83 @@ def test_recovery_routing_uses_last_trial_and_masks_cutoff_lanes():
     np.testing.assert_allclose(phi[2:], [0.4, 0.4, 0.3, 0.3])
     assert np.isnan(phi[:2]).all()
     np.testing.assert_allclose(mass[:2], cutoff + 1.)
+
+
+@pytest.mark.parametrize("indices", [[], [0], [1, 9], list(range(35))])
+def test_deferred_recovery_compacts_and_preserves_order(monkeypatch, indices):
+    history = []
+
+    def forward(params, accurate, root):
+        phi = params[0]
+        jax.debug.callback(lambda p, r: history.append((float(p), float(r))), phi, root)
+        return jnp.array([phi - root]), (12000., 2000.), jnp.isfinite(phi)
+
+    monkeypatch.setattr(scalar_tensor, "_background_forward", forward)
+    n = 37
+    active = jnp.zeros(n, dtype=bool).at[jnp.array(indices, dtype=int)].set(True)
+    roots = jnp.linspace(.1, .35, n)
+    previous = (roots + 1., jnp.full(n, 11.), jnp.full(n, 22.),
+                jnp.full(n, .5), ~active)
+    args = (roots,)
+    expected = jax.jit(jax.vmap(scalar_tensor._deferred_recovery.fun))(
+        active, previous, args
+    )
+    jax.block_until_ready(expected)
+    history.clear()
+    actual = jax.jit(jax.vmap(scalar_tensor._deferred_recovery))(
+        active, previous, args
+    )
+    jax.block_until_ready(actual)
+    for x, y in zip(actual, expected):
+        np.testing.assert_allclose(x, y, rtol=0, atol=0, equal_nan=True)
+    evaluated_roots = {round(r, 6) for p, r in history if np.isfinite(p)}
+    assert evaluated_roots == {round(float(roots[i]), 6) for i in indices}
+    if not indices:
+        assert not history  # The entire recovery queue is skipped.
+
+
+def test_deferred_recovery_nested_vmap_and_shared_arguments(monkeypatch):
+    def forward(params, accurate, root, scale):
+        phi = params[0]
+        return jnp.array([scale * (phi - root)]), (12000., 2000.), jnp.isfinite(phi)
+
+    monkeypatch.setattr(scalar_tensor, "_background_forward", forward)
+    roots = jnp.linspace(.1, .35, 26).reshape(2, 13)
+    active = jnp.arange(26).reshape(2, 13) % 3 == 0
+    previous = (roots + 1., jnp.full_like(roots, 11.), jnp.full_like(roots, 22.),
+                jnp.full_like(roots, .5), ~active)
+
+    def one_family(mask, old, root):
+        return jax.vmap(scalar_tensor._deferred_recovery, in_axes=(0, 0, (0, None)))(
+            mask, old, (root, 2.)
+        )
+
+    actual = jax.jit(jax.vmap(one_family))(active, previous, roots)
+    expected = jax.jit(jax.vmap(jax.vmap(
+        lambda mask, old, root: scalar_tensor._deferred_recovery.fun(mask, old, (root, 2.))
+    )))(active, previous, roots)
+    for x, y in zip(actual, expected):
+        np.testing.assert_allclose(x, y, rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_public_solver_traces_with_deferred_recovery(nested):
+    # Exercise real Diffrax/custom-batching transformations, not only toy
+    # residuals. No ODE execution or GPU is needed to catch tracing failures.
+    values = jnp.linspace(1e-12, 1e-10, 8)
+    eos = EOSData(values, values, values * 1e8, values * 3,
+                  jnp.ones(8), jnp.full(8, .5))
+    solver = ScalarTensorTOVSolver()
+
+    def one_family(beta):
+        return jax.vmap(lambda pc: solver.solve(
+            eos, pc, {"beta_ST": beta, "phi_inf_tgt": .001}
+        ))(values[:3])
+
+    if nested:
+        jax.make_jaxpr(jax.jit(jax.vmap(one_family)))(jnp.array([-9., -15.]))
+    else:
+        jax.make_jaxpr(jax.jit(one_family))(-9.)
 
 
 @pytest.mark.parametrize("root,upper", [(0.31, 1.0), (0.329, 0.33)])

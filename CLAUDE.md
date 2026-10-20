@@ -219,6 +219,13 @@ temporaries under particle batching without changing quadrature or
 precision. See the YAML reference and inference architecture notes.
 
 ### Key Design Principles
+
+`tov.stability_branch` is optional: `default` preserves existing bounded branch
+detection, while `first` selects only the first detected increasing-mass interval
+before family interpolation. The transform forwards it to shared TOV family
+processing, including scalar observables. Keep the existing interpolation,
+likelihood algorithms, and strict solver-failure validation unchanged.
+
 - **JAX-first**: Hardware acceleration with automatic differentiation
   - Avoid Python `if` statements on traced values (use `jnp.where()`)
   - Avoid `float()` casts on traced arrays

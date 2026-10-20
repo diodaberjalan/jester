@@ -19,6 +19,8 @@ class BaseTOVConfig(JesterBaseModel):
         Number of data points for TOV integration (default: 100)
     nb_masses : int
         Number of masses to sample (default: 100)
+    stability_branch : Literal["default", "first"]
+        Existing bounded branch selection (default) or only the first stable region.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -38,6 +40,11 @@ class BaseTOVConfig(JesterBaseModel):
         default=100,
         gt=0,
         description="Number of masses to sample when constructing the M-R-Λ family",
+    )
+    stability_branch: Literal["default", "first"] = Field(
+        default="default",
+        description="Preserve existing bounded stable-branch selection (default), "
+        "or retain only the first stable region through its maximum mass (first).",
     )
 
 

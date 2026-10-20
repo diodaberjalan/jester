@@ -12,6 +12,7 @@ systems commonly used in neutron star physics.
 from jax import vmap
 import jax.numpy as jnp
 from functools import partial
+from typing import Literal
 from jaxtyping import Array, Float, Int
 from interpax._spline import interp1d as interpax_interp1d
 
@@ -477,7 +478,7 @@ def get_MR_split_index(x, y, jump_threshold=20.0):
 
 
 def limit_by_MTOV_and_interpolate(
-    pc, m, r, l, ndat
+    pc, m, r, l, ndat, stability_branch: Literal["default", "first"] = "default"
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     r"""
     Refactor stellar solution filter and interpolation for stable branch.
@@ -495,10 +496,19 @@ def limit_by_MTOV_and_interpolate(
         r: Radius array [km]
         l: Tidal deformability array
         ndat: Number of points to interpolate across stable segments
+        stability_branch: ``default`` preserves the existing bounded stable-segment
+            selection. ``first`` retains only its first interval through the first
+            maximum-mass endpoint. Treat this option as static when using JIT.
 
     Returns:
         tuple: Interpolated arrays (pc_new, m_new, r_new, l_new)
     """
+    if stability_branch not in ("default", "first"):
+        raise ValueError("stability_branch must be 'default' or 'first'")
+    if stability_branch == "first" and len(m) < 2:
+        invalid = jnp.full((ndat,), jnp.nan)
+        return invalid, invalid, invalid, invalid
+
     # Sort all sequence by pc (Ensure monotonicity of Pc)
     sort_idx = jnp.argsort(pc)
     pc = pc[sort_idx]
@@ -533,6 +543,11 @@ def limit_by_MTOV_and_interpolate(
     s2_start, s2_end = starts[1], ends[1]
     s3_start, s3_end = starts[2], ends[2]
     s4_start, s4_end = starts[3], ends[3]
+
+    if stability_branch == "first":
+        # Reuse the detected first interval and the existing query/interpolation
+        # machinery; later intervals contribute no length in this mode.
+        s2_start = s2_end = s3_start = s3_end = s4_start = s4_end = s1_end
 
     # Calculate lengths in log(pc) space for each stable segment
     len1 = log_pc[s1_end] - log_pc[s1_start]
@@ -571,10 +586,25 @@ def limit_by_MTOV_and_interpolate(
     # Fallback for completely unstable EOS (total_len = 0)
     log_pc_query = jnp.where(total_len > 0, log_pc_query, log_pc[0])
 
+    if stability_branch == "first":
+        # Do not hide failed raw solutions when excluding later intervals.
+        first_valid = (
+            (total_len > 0)
+            & jnp.all(jnp.isfinite(pc))
+            & jnp.all(jnp.isfinite(m))
+            & jnp.all(jnp.isfinite(r))
+        )
+        log_pc_query = jnp.where(first_valid, log_pc_query, jnp.nan)
+
     # Interpolate at query points using cubic Hermite spline
     rs_new = cubic_hermite_interp(log_pc_query, log_pc, r)
     lambdas_new = cubic_hermite_interp(log_pc_query, log_pc, l)
     ms_new = cubic_hermite_interp(log_pc_query, log_pc, m)
+
+    if stability_branch == "first":
+        # Keep missing tidal/extra data invalid without poisoning valid M-R data
+        # when tidal calculations were intentionally disabled.
+        lambdas_new = jnp.where(jnp.all(jnp.isfinite(l)), lambdas_new, jnp.nan)
 
     return jnp.exp(log_pc_query), ms_new, rs_new, lambdas_new
 

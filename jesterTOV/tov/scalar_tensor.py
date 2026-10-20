@@ -12,10 +12,11 @@ where the gravitational interaction includes both a metric tensor and a scalar f
 """
 
 import functools
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 import jax
 import jax.numpy as jnp
 from jax import lax
+from jax.custom_batching import custom_vmap
 from diffrax import diffeqsolve, ODETerm, Dopri5, Tsit5, Bosh3, SaveAt, PIDController, Event, RecursiveCheckpointAdjoint
 
 from jesterTOV import utils
@@ -576,6 +577,106 @@ def _recover_background(forward_solver, active):
     return phi, best[1], best[2], best[0], have & done & ~bad
 
 
+def _background_forward(params, accurate, h0, dh, r0, m0, eos_dict, phi_inf_target):
+    """Shared background integration for fast shooting and queued recovery."""
+    phi0_trial = params[0]
+    M_limit = 7.0 * utils.solar_mass_in_meter
+    is_nan = jnp.isnan(phi0_trial)
+    m0_eff = jnp.where(is_nan, M_limit + 10.0, m0)
+    t0_eff = jnp.where(is_nan, 0.0, h0)
+    y0 = (r0, m0_eff, 0.0, 0.0, phi0_trial)
+
+    def mass_event(t, y, args, **kwargs):
+        return y[1] > M_limit
+
+    sol_iter = diffeqsolve(
+        ODETerm(_tov_ode_iter),
+        Bosh3(scan_kind="bounded"),
+        t0=t0_eff,
+        t1=0,
+        dt0=dh,
+        y0=y0,
+        args=eos_dict,
+        saveat=SaveAt(t1=True),
+        stepsize_controller=PIDController(
+            rtol=jnp.where(accurate, 1e-6, 1e-5),
+            atol=jnp.where(accurate, 1e-7, 1e-6),
+        ),
+        event=Event(mass_event),
+        adjoint=RecursiveCheckpointAdjoint(),
+        max_steps=500,
+        throw=False,
+    )
+    R = sol_iter.ys[0][-1]
+    M_s = sol_iter.ys[1][-1]
+    psi_s = sol_iter.ys[3][-1]
+    phi_s = sol_iter.ys[4][-1]
+    nu_s_prime = 2 * M_s / (R * (R - 2.0 * M_s)) + R * jnp.power(psi_s, 2)
+    front = (
+        2 * psi_s / jnp.sqrt(jnp.power(nu_s_prime, 2) + 4 * jnp.power(psi_s, 2) + 1e-25)
+    )
+    inside_tanh = jnp.sqrt(
+        jnp.power(nu_s_prime, 2) + 4 * jnp.power(psi_s, 2)
+    ) / (nu_s_prime + 2 / R + 1e-25)
+    inside_tanh_safe = jnp.clip(inside_tanh, -0.999999, 0.999999)
+    phi_inf = phi_s + front * jnp.arctanh(inside_tanh_safe)
+    residual = jnp.array([phi_inf - phi_inf_target])
+    surface_ok = (sol_iter.result._value == 0) & (sol_iter.ts[-1] == 0)
+    surface_ok &= jnp.all(jnp.isfinite(jnp.array([
+        residual[0], R, M_s, inside_tanh,
+    ]))) & (R > 0) & (M_s > 0)
+    return residual, (R, M_s), surface_ok
+
+
+@custom_vmap
+def _deferred_recovery(active, previous, forward_args):
+    """Scalar path; batching compacts flagged lanes into a GPU-only queue."""
+    def recover(_):
+        def forward(params):
+            return _background_forward(params, False, *forward_args)
+
+        return _recover_background(forward, active)
+
+    return lax.cond(active, recover, lambda _: previous, operand=None)
+
+
+@_deferred_recovery.def_vmap
+def _deferred_recovery_batch(axis_size, in_batched, active, previous, forward_args):
+    # Shapes remain static under jit. Only the queue count is dynamic: no host
+    # synchronization, dynamic allocation, or recompilation by failure count.
+    active, previous, forward_args = jax.tree.map(
+        lambda x, batched: x if batched else jnp.broadcast_to(x, (axis_size,) + jnp.shape(x)),
+        (active, previous, forward_args), tuple(in_batched),
+    )
+    count = jnp.sum(active, dtype=jnp.int32)
+    indices = jnp.nonzero(active, size=axis_size, fill_value=0)[0]
+    width = min(8, axis_size)
+    # Padding permits a fixed-width final chunk without processing a real lane
+    # twice. Out-of-range slots are inactive and never scattered back.
+    indices = jnp.pad(indices, (0, width))
+
+    def condition(state):
+        offset, _ = state
+        return offset < count
+
+    def step(state):
+        offset, outputs = state
+        ids = lax.dynamic_slice_in_dim(indices, offset, width)
+        enabled = offset + jnp.arange(width) < count
+        args = jax.tree.map(lambda x: x[ids], forward_args)
+        old = jax.tree.map(lambda x: x[ids], previous)
+        recovered = jax.vmap(_deferred_recovery.fun)(enabled, old, args)
+        # Drop padding rather than overwriting the valid result at index zero.
+        targets = jnp.where(enabled, ids, axis_size)
+        outputs = jax.tree.map(
+            lambda x, y: x.at[targets].set(y, mode="drop"), outputs, recovered
+        )
+        return offset + width, outputs
+
+    _, outputs = lax.while_loop(condition, step, (jnp.int32(0), previous))
+    return outputs, jax.tree.map(lambda _: True, outputs)
+
+
 @functools.partial(jax.jit, static_argnames=["max_iterations", "calculate_tidal"])
 def _compiled_tov_solve(
     pc, beta_ST, phi_inf_target, phi0, ns, ps, hs, es, dloge_dlogps, max_iterations=15, calculate_tidal=True
@@ -634,59 +735,9 @@ def _compiled_tov_solve(
     tol = 1e-4
 
     def forward_solver(params, accurate=False):
-        phi0_trial = params[0]
-        M_limit = 7.0 * utils.solar_mass_in_meter
-
-        # Fast-skip for converged iterations (injected with NaN)
-        is_nan = jnp.isnan(phi0_trial)
-        m0_eff = jnp.where(is_nan, M_limit + 10.0, m0)
-        t0_eff = jnp.where(is_nan, 0.0, h0)
-        y0 = (r0, m0_eff, nu0, psi0, phi0_trial)
-
-        def mass_event(t, y, args, **kwargs):
-            return y[1] > M_limit
-
-        sol_iter = diffeqsolve(
-            ODETerm(_tov_ode_iter),
-            Bosh3(scan_kind="bounded"),
-            t0=t0_eff,
-            t1=0,
-            dt0=dh,
-            y0=y0,
-            args=eos_dict,
-            saveat=SaveAt(t1=True),
-            stepsize_controller=PIDController(
-                rtol=jnp.where(accurate, 1e-6, 1e-5),
-                atol=jnp.where(accurate, 1e-7, 1e-6),
-            ),
-            event=Event(mass_event),
-            adjoint=RecursiveCheckpointAdjoint(),
-            max_steps=500,
-            throw=False,
+        return _background_forward(
+            params, accurate, h0, dh, r0, m0, eos_dict, phi_inf_target
         )
-        R = sol_iter.ys[0][-1]
-        M_s = sol_iter.ys[1][-1]
-        nu_s = sol_iter.ys[2][-1]
-        psi_s = sol_iter.ys[3][-1]
-        phi_s = sol_iter.ys[4][-1]
-
-        nu_s_prime = 2 * M_s / (R * (R - 2.0 * M_s)) + R * jnp.power(psi_s, 2)
-
-        front = (
-            2 * psi_s / jnp.sqrt(jnp.power(nu_s_prime, 2) + 4 * jnp.power(psi_s, 2) + 1e-25)
-        )
-        inside_tanh = jnp.sqrt(
-            jnp.power(nu_s_prime, 2) + 4 * jnp.power(psi_s, 2)
-        ) / (nu_s_prime + 2 / R + 1e-25)
-        inside_tanh_safe = jnp.clip(inside_tanh, -0.999999, 0.999999)
-        phi_inf = phi_s + front * jnp.arctanh(inside_tanh_safe)
-
-        residual = jnp.array([phi_inf - phi_inf_target])
-        surface_ok = (sol_iter.result._value == 0) & (sol_iter.ts[-1] == 0)
-        surface_ok &= jnp.all(jnp.isfinite(jnp.array([
-            residual[0], R, M_s, inside_tanh,
-        ]))) & (R > 0) & (M_s > 0)
-        return residual, (R, M_s), surface_ok
 
     def run_iteration(phi0_init):
         return _correct_background_local(forward_solver, phi0_init, max_iterations, tol)
@@ -705,11 +756,10 @@ def _compiled_tov_solve(
     needs_recovery = ~background_ok & ~hit_mass_cutoff
     (
         phi0_final, R_final, M_inf_final, phi_inf_final, background_ok
-    ) = lax.cond(
+    ) = _deferred_recovery(
         needs_recovery,
-        lambda _: _recover_background(forward_solver, needs_recovery),
-        lambda _: (phi0_final, R_final, M_inf_final, phi_inf_final, background_ok),
-        operand=None,
+        (phi0_final, R_final, M_inf_final, phi_inf_final, background_ok),
+        (h0, dh, r0, m0, eos_dict, phi_inf_target),
     )
     # Failed lanes must also skip the final ODEs when cond is batched by vmap.
     phi0_final = jnp.where(background_ok, phi0_final, jnp.nan)
@@ -938,8 +988,9 @@ class ScalarTensorTOVSolver(TOVSolverBase):
     at the star surface and spatial infinity.
 
     Uses at most 15 fast shooting evaluations, including a temporary accuracy
-    burst of at most two evaluations, followed by masked grid/bracket recovery
-    for unresolved points. Any final integration failure invalidates the family.
+    burst of at most two evaluations, followed by GPU-queued grid/bracket
+    recovery for unresolved points. Any final integration failure invalidates
+    the family.
 
     Implements the scalar-tensor TOV equations with tidal deformability
     following Creci et al. (2023) Phys.Rev.D 111 (2025) 8, 089901 (erratum).
@@ -999,7 +1050,16 @@ class ScalarTensorTOVSolver(TOVSolverBase):
     def get_required_parameters(self) -> list[str]:
         return ["beta_ST", "phi_inf_tgt", "phi_c"]
 
-    def _create_family_data(self, pcs, masses, radii, k2s, ndat, extra=None):
+    def _create_family_data(
+        self,
+        pcs,
+        masses,
+        radii,
+        k2s,
+        ndat,
+        extra=None,
+        stability_branch: Literal["default", "first"] = "default",
+    ):
         """Reject the whole ST family after any final raw or processed failure."""
         valid = jnp.all(jnp.isfinite(masses) & (masses > 0))
         valid &= jnp.all(jnp.isfinite(radii) & (radii > 0))
@@ -1009,7 +1069,9 @@ class ScalarTensorTOVSolver(TOVSolverBase):
                 valid &= jnp.all(jnp.stack([
                     jnp.all(jnp.isfinite(value)) for value in extra.values()
                 ]))
-        family = super()._create_family_data(pcs, masses, radii, k2s, ndat, extra)
+        family = super()._create_family_data(
+            pcs, masses, radii, k2s, ndat, extra, stability_branch
+        )
         valid &= jnp.all(jnp.isfinite(family.masses) & (family.masses > 0))
         valid &= jnp.all(jnp.isfinite(family.radii) & (family.radii > 0))
         if self.calculate_tidal:
