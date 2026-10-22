@@ -178,6 +178,18 @@ value = array.item()  # type: ignore[union-attr]
   3. **ScalarTensorTOVSolver** (`tov/scalar_tensor.py`) - Scalar-tensor gravity
      - Jordan frame implementation (Brown 2023, ApJ 958 125)
      - Required parameters: beta_ST, phi_c, nu_c
+     - Local shooting uses five damped updates then safeguarded secant within
+       15 evaluations, plus four one-time probes if increasing central field
+       worsens a negative residual. Positive probes give one log midpoint;
+       negative-only probes restart from the largest valid field with one
+       damped update before secant. Failed upward walks pass a cached negative
+       lower bound to recovery; all-invalid probes skip recovery. The existing
+       GPU queue uses eight slots for one family and pools nested EOS/pressure
+       batches globally with eight slots per EOS. Recovery evaluates grid
+       points in tiles of 16 and selects the first adjacent valid sign
+       bracket, with 17 boundary refinements and 40 bisections. Mask finished
+       lanes before forward evaluation. Keep background tolerances 1e-5/1e-6,
+       max_steps=500 and the evaluated-field/final-integration checks unchanged.
 - Key methods:
   - `solve(eos_data, pc, **kwargs) -> TOVSolution` - Single star solution
   - `construct_family(eos_data, ndat, min_nsat, **kwargs) -> FamilyData` - M-R-Λ family curves

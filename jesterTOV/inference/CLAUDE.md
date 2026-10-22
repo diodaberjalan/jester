@@ -72,6 +72,31 @@ numerically but need not be bitwise identical because reduction order
 changes. This bounds likelihood workspaces under particle `vmap`; it
 does not control stellar-solver or SMC memory.
 
+### Scalar-tensor local shooting
+
+The local solver uses five damped updates then safeguarded secant within 15
+evaluations, including temporary accurate trials. An increasing field that
+worsens a negative residual triggers four additional probes once. With positive
+and negative endpoints, use one geometric midpoint and resume secant. Otherwise
+restart from the largest valid probe field with one damped update. Negative-only
+upward searches keep advancing in field even when residuals fluctuate. A failed
+upward trial passes its largest valid negative endpoint into GPU-queued recovery;
+all-four-invalid probes retain their recovery veto.
+
+Recovery reuses the cached lower residual and the original grid above it. Stop
+after the first 16-point tile containing an adjacent valid sign bracket,
+selecting its first bracket; otherwise use the first valid/invalid boundary
+after scanning for later brackets. Single-family queues retain width 8;
+nested EOS/pressure batches pool requests globally with eight slots per EOS.
+Changed batching can introduce small floating-point differences. Keep 17 boundary
+refinements, 40 root bisections, background max_steps=500 and ordinary tolerances
+1e-5/1e-6. Explicitly NaN-mask finished batched lanes before forward evaluation.
+The lower bound tracks an upward crossing, not all possible roots. The 17-step
+cap preserves the validated datasets but is not a universal guarantee for unseen
+EOS. The accepted field and residual must come from the same evaluated trial;
+final tidal integration and strict family-failure checks remain unchanged.
+Existing YAML configurations need no additional keys.
+
 ### Inference Documentation
 
 `tov.stability_branch` defaults to `default` and may be omitted. `first` is

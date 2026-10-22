@@ -18,6 +18,44 @@ from jesterTOV.tov.scalar_tensor import (
 from jesterTOV.tov import scalar_tensor
 
 
+def test_local_corrector_retains_five_damped_updates_then_secant():
+    history = []
+
+    def forward(params, accurate=False):
+        phi = params[0]
+        jax.debug.callback(lambda x: history.append(float(x)), phi)
+        return jnp.array([phi - 0.31]), (12000.0 + phi, 2000.0 + phi), jnp.isfinite(phi)
+
+    state = jax.jit(lambda: _correct_background_local(forward, 0.28, 15, 1e-4))()
+    jax.block_until_ready(state)
+    np.testing.assert_allclose(history[:6], 0.31 + (0.28 - 0.31) * 0.5 ** np.arange(6))
+    np.testing.assert_allclose(history[6], history[5] - 0.8 * (history[5] - 0.31))
+    assert state[-1] and abs(state[4]) < 1e-4
+    assert state[0] == len(history) <= 15
+    np.testing.assert_allclose(state[5], [history[-1]])
+    np.testing.assert_allclose(
+        state[2:4], [12000.0 + history[-1], 2000.0 + history[-1]]
+    )
+
+
+def test_local_corrector_does_not_return_unevaluated_damped_proposal():
+    seed = 0.3100005
+
+    def forward(params, accurate=False):
+        phi = params[0]
+        return (
+            jnp.array([100.0 * (phi - 0.31)]),
+            (12000.0 + phi, 2000.0 + phi),
+            jnp.isfinite(phi),
+        )
+
+    state = jax.jit(lambda: _correct_background_local(forward, seed, 15, 1e-4))()
+    assert state[0] == 1 and state[-1]
+    assert state[5][0] == seed
+    assert abs(100.0 * (state[1] - 0.31)) > 1e-4
+    np.testing.assert_allclose(state[4], 100.0 * (state[5][0] - 0.31))
+
+
 @pytest.mark.parametrize("slope", [1.5, 13.2, 156.9, -20.0])
 @pytest.mark.parametrize("seed", [0.28, 0.31004, 0.34])
 def test_local_corrector_handles_residual_slopes(slope, seed):
@@ -290,17 +328,19 @@ def test_recovery_routing_uses_last_trial_and_masks_cutoff_lanes():
     def final_state(trial):
         # The fast loop already freezes the last real trial, excluding masked
         # NaN sentinels and any earlier cutoff hits.
-        mass, residual, surface_ok, iterations = trial
+        mass, residual, surface_ok, iterations, skip, bounded = trial
         surface_ok = surface_ok.astype(bool)
         return (
             iterations,
-            0.3,
+            999.0,  # Unevaluated proposal must never reach final integration.
             12000.0,
             mass,
             residual,
             jnp.array([0.3]),
             jnp.array([residual]),
             surface_ok,
+            skip.astype(bool),
+            (jnp.array(.2), jnp.array(-.1), bounded.astype(bool)),
         )
 
     def recover(active, previous, forward_args):
@@ -318,16 +358,20 @@ def test_recovery_routing_uses_last_trial_and_masks_cutoff_lanes():
 
     cutoff = 7.0 * scalar_tensor.utils.solar_mass_in_meter
     trials = jnp.array([
-        [cutoff + 1., 1e-5, False, 6],   # cutoff despite small residual
-        [cutoff + 1., 0.1, False, 15],   # cutoff at iteration limit
-        [2000., 0.1, True, 15],         # unconverged, valid surface: recover
-        [2000., 1e-5, False, 15],       # failed integration, not cutoff: recover
-        [2000., 1e-5, True, 2],         # early success: no recovery
-        [2000., 1e-5, True, 15],        # final success, even after earlier cutoff
+        [cutoff + 1., 1e-5, False, 6, False, False],   # cutoff despite small residual
+        [cutoff + 1., 0.1, False, 15, False, False],   # cutoff at iteration limit
+        [2000., 0.1, True, 15, False, False],         # unconverged, valid surface: recover
+        [2000., 1e-5, False, 15, False, False],       # failed integration, not cutoff: recover
+        [2000., 1e-5, True, 2, False, False],         # early success: no recovery
+        [2000., 1e-5, True, 15, False, False],        # final success, even after earlier cutoff
+        [2000., .1, False, 15, True, False],  # all four probes invalid
+        [2000., .1, False, 15, False, True],  # failed upward walk, bounded recovery
+        [2000., 1e-5, True, 10, True, False],  # local success overrides skip flag
     ])
     phi, mass, ok = jax.jit(jax.vmap(env["route"]))(trials)
-    np.testing.assert_array_equal(ok, [False, False, True, True, True, True])
-    np.testing.assert_allclose(phi[2:], [0.4, 0.4, 0.3, 0.3])
+    np.testing.assert_array_equal(ok, [False, False, True, True, True, True, False, True, True])
+    np.testing.assert_allclose(phi[jnp.array([2, 3, 4, 5, 7, 8])], [0.4, 0.4, 0.3, 0.3, 0.4, 0.3])
+    assert np.isnan(phi[6])
     assert np.isnan(phi[:2]).all()
     np.testing.assert_allclose(mass[:2], cutoff + 1.)
 
@@ -460,7 +504,7 @@ def test_recovery_masks_successful_lanes():
 @pytest.mark.parametrize("failed_field", [None, "mass", "k2", "extra", "processed"])
 def test_whole_family_rejection(monkeypatch, failed_field):
     # Even a postprocessor that hides a raw failed point must not rescue it.
-    def process(self, pcs, masses, radii, k2s, ndat, extra=None):
+    def process(self, pcs, masses, radii, k2s, ndat, extra=None, stability_branch="default"):
         result = jnp.ones(ndat)
         if failed_field == "processed":
             result = result.at[0].set(jnp.nan)
@@ -488,7 +532,7 @@ def test_whole_family_rejection(monkeypatch, failed_field):
 
 
 def test_no_tidal_family_allows_intentional_nan_love_numbers(monkeypatch):
-    def process(self, pcs, masses, radii, k2s, ndat, extra=None):
+    def process(self, pcs, masses, radii, k2s, ndat, extra=None, stability_branch="default"):
         return FamilyData(pcs, masses, radii, k2s, extra)
 
     monkeypatch.setattr(TOVSolverBase, "_create_family_data", process)
@@ -502,3 +546,210 @@ def test_no_tidal_family_allows_intentional_nan_love_numbers(monkeypatch):
     )
     assert np.isfinite(family.masses).all()
     assert np.isnan(family.lambdas).all()
+
+
+
+def test_probe_pair_uses_residual_for_positive_and_field_for_negative():
+    pair = scalar_tensor._select_probe_pair(
+        jnp.array([-.001, -.8, .3, .02]), jnp.ones(4, dtype=bool)
+    )
+    assert pair.next_phi == .5
+    assert pair.previous_phi == .01
+    pair = scalar_tensor._select_probe_pair(
+        jnp.array([-.001, -.8, -.3, -100.]), jnp.array([True, True, True, False])
+    )
+    assert pair.next_phi == .1 and not pair.has_positive
+    pair = scalar_tensor._select_probe_pair(
+        jnp.full(4, jnp.nan), jnp.ones(4, dtype=bool)
+    )
+    assert not pair.has_valid
+
+
+def test_positive_probes_use_one_log_midpoint_then_secant():
+    history = []
+
+    def forward(x, accurate=False):
+        phi = x[0]
+        jax.debug.callback(lambda p: history.append(float(p)), phi)
+        value = jnp.where(phi < .1, -phi, phi-.2)
+        return jnp.array([value]), (12000., 2000.), jnp.isfinite(phi)
+
+    out = jax.jit(lambda: _correct_background_local(forward, .005, 15, 1e-4))()
+    jax.block_until_ready(out)
+    jax.effects_barrier()
+    np.testing.assert_allclose(sorted(history[2:6]), [.001, .01, .1, .5])
+    midpoint = np.sqrt(.1*.5)
+    np.testing.assert_allclose(history[6], midpoint)
+    slope = ((midpoint-.2)-(-.1))/(midpoint-.1)
+    np.testing.assert_allclose(history[7], midpoint-.8*(midpoint-.2)/(slope+1e-12), rtol=1e-9)
+    assert out[7] and abs(out[4]) < 1e-4
+    assert len(history) == int(out[0])+4
+
+
+def test_negative_probes_restart_at_largest_field_with_one_damped_update():
+    history = []
+
+    def forward(x, accurate=False):
+        phi = x[0]
+        jax.debug.callback(lambda p: history.append(float(p)), phi)
+        value = jnp.where(phi <= .5, -.02-phi, phi-.8)
+        return jnp.array([value]), (12000., 2000.), jnp.isfinite(phi)
+
+    out = jax.jit(lambda: _correct_background_local(forward, .005, 15, 1e-4))()
+    jax.block_until_ready(out)
+    jax.effects_barrier()
+    np.testing.assert_allclose(history[6:8], [.5, .76])
+    slope = (-.04-(-.52))/(.76-.5+1e-12)
+    np.testing.assert_allclose(history[8], .76-.8*(-.04)/(slope+1e-12))
+    assert len(history) == int(out[0])+4
+
+
+@pytest.mark.parametrize('all_invalid', [False, True])
+def test_probe_failure_routes_to_bounded_recovery_or_skip(all_invalid):
+    def forward(x, accurate=False):
+        phi = x[0]
+        valid = jnp.isfinite(phi) & (phi < .12)
+        if all_invalid:
+            valid = jnp.isfinite(phi) & (((phi > .003) & (phi < .008)) |
+                                          ((phi > .014) & (phi < .019)))
+        return jnp.array([-.02-phi]), (10., 1.), valid
+
+    out = jax.jit(lambda: _correct_background_local(
+        forward, .005, 15, 1e-4, return_skip_recovery=True, return_recovery_hint=True))()
+    assert bool(out[8]) == all_invalid
+    assert bool(out[9][2]) != all_invalid
+    if not all_invalid:
+        assert out[9][0] >= .1 and out[9][1] < 0
+
+
+def test_recovery_reuses_lower_endpoint_and_ignores_padding():
+    history = []
+
+    def forward(x):
+        phi = x[0]
+        jax.debug.callback(lambda p: history.append(float(p)), phi)
+        return jnp.array([phi-.25]), (12000., 2000.), jnp.isfinite(phi)
+
+    out = jax.jit(lambda: _recover_background(
+        forward, jnp.array(True), (.2, -.05, jnp.array(True))))()
+    jax.block_until_ready(out)
+    jax.effects_barrier()
+    assert out[4] and all(p > .2 for p in history if np.isfinite(p))
+    out = jax.jit(lambda: _recover_background(
+        forward, jnp.array(True), (.9, -.1, jnp.array(True))))()
+    assert not out[4]
+
+
+def test_later_sign_bracket_has_priority_over_earlier_failed_boundary():
+    def forward(x):
+        phi = x[0]
+        value = jnp.where(phi < .1, -.1, phi-.3)
+        valid = jnp.isfinite(phi) & ((phi < .03) | (phi > .2))
+        return jnp.array([value]), (12000., 2000.), valid
+
+    out = jax.jit(lambda: _recover_background(forward, jnp.array(True)))()
+    assert out[4] and abs(out[0]-.3) < .001
+
+
+def test_finished_recovery_lanes_do_not_repeat_finite_grid_trials():
+    history = []
+
+    def record(lane, phi):
+        if np.isfinite(phi):
+            history.append(int(lane))
+
+    def solve(lane, root, active):
+        def forward(x):
+            phi = x[0]
+            jax.debug.callback(record, lane, phi)
+            return jnp.array([phi-root]), (12000., 2000.), jnp.isfinite(phi)
+        return _recover_background(forward, active)
+
+    roots, active = jnp.array([.0003, .7, .2]), jnp.array([True, True, False])
+    for i in range(3):
+        out = jax.jit(solve)(jnp.int32(i), roots[i], active[i])
+        jax.block_until_ready(out)
+    jax.effects_barrier()
+    expected = np.bincount(history, minlength=3)
+    history.clear()
+    out = jax.jit(jax.vmap(solve))(jnp.arange(3), roots, active)
+    jax.block_until_ready(out)
+    jax.effects_barrier()
+    np.testing.assert_array_equal(np.bincount(history, minlength=3), expected)
+    assert expected[-1] == 0
+
+
+@pytest.mark.parametrize('n', [1, 2, 10, 33])
+def test_hinted_recovery_queue_matches_scalar_order_and_masks(monkeypatch, n):
+    def forward(x, accurate, root, *unused):
+        return jnp.array([x[0]-root]), (12000., 2000.), jnp.isfinite(x[0])
+
+    monkeypatch.setattr(scalar_tensor, '_background_forward', forward)
+    roots = jnp.linspace(.1, .35, n)
+    lower = roots*.7
+    active = jnp.arange(n)%3 != 1
+    previous = (roots+1, jnp.full(n, 11.), jnp.full(n, 22.), jnp.full(n, .5), ~active)
+    args = (roots, jnp.zeros(n), jnp.zeros(n), jnp.zeros(n), jnp.zeros(n), jnp.zeros(n),
+            (lower, lower-roots, jnp.arange(n)%2 == 0))
+    expected = jax.jit(jax.vmap(scalar_tensor._deferred_recovery.fun))(active, previous, args)
+    actual = jax.jit(jax.vmap(scalar_tensor._deferred_recovery))(active, previous, args)
+    for a, b in zip(actual, expected):
+        np.testing.assert_array_equal(a, b)
+
+
+@pytest.mark.parametrize('n', [1, 2, 10, 37])
+@pytest.mark.parametrize('mask_kind', ['none', 'mixed', 'all'])
+def test_global_recovery_pools_nested_axes(monkeypatch, n, mask_kind):
+    calls = []
+    queue = scalar_tensor._run_recovery_queue
+
+    def observed(active, previous, args, *, width):
+        calls.append((active.shape[0], width))
+        return queue(active, previous, args, width=width)
+
+    def forward(params, accurate, root, scale):
+        phi = params[0]
+        return jnp.array([scale*(phi-root)]), (12000.+phi, 2000.+phi), jnp.isfinite(phi)
+
+    monkeypatch.setattr(scalar_tensor, '_run_recovery_queue', observed)
+    monkeypatch.setattr(scalar_tensor, '_background_forward', forward)
+    roots = jnp.linspace(.1, .35, 3*n).reshape(3, n)
+    active = jnp.arange(3*n).reshape(3, n) % 3 == 0
+    if mask_kind != 'mixed':
+        active = jnp.full((3, n), mask_kind == 'all')
+    previous = (roots+1, roots+2, roots+3, roots+4, ~active)
+
+    def family(mask, old, root):
+        return jax.vmap(scalar_tensor._deferred_recovery, in_axes=(0, 0, (0, None)))(
+            mask, old, (root, 2.))
+
+    out = jax.jit(jax.vmap(family))(active, previous, roots)
+    expected = jax.jit(jax.vmap(jax.vmap(
+        lambda mask, old, root: scalar_tensor._deferred_recovery.fun(mask, old, (root, 2.))
+    )))(active, previous, roots)
+    for actual, reference in zip(out, expected):
+        np.testing.assert_allclose(actual, reference, rtol=0, atol=0, equal_nan=True)
+    assert (3*n, 24) in calls
+
+
+@pytest.mark.parametrize('index', [0, 15, 31, 47, 61])
+def test_tiled_recovery_brackets_across_tiles(index):
+    grid = np.concatenate(([0.], np.geomspace(1e-6, .02, 28),
+                           np.linspace(.02, .4, 32)[1:], [.5, .65, .8]))
+    root = (grid[index]+grid[index+1])/2
+
+    def forward(params):
+        phi = params[0]
+        return jnp.array([phi-root]), (12000., 2000.), jnp.isfinite(phi)
+
+    out = jax.jit(lambda: _recover_background(forward, jnp.array(True)))()
+    assert out[-1] and abs(out[0]-root) < 1e-4
+
+
+def test_tiled_recovery_does_not_bracket_invalid_finite_endpoint():
+    def forward(params):
+        phi = params[0]
+        return jnp.array([phi-.3]), (12000., 2000.), jnp.isfinite(phi) & (phi < .2)
+
+    out = jax.jit(lambda: _recover_background(forward, jnp.array(True)))()
+    assert not out[-1]
