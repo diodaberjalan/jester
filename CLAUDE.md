@@ -194,7 +194,11 @@ value = array.item()  # type: ignore[union-attr]
   - `solve(eos_data, pc, **kwargs) -> TOVSolution` - Single star solution
   - `construct_family(eos_data, ndat, min_nsat, **kwargs) -> FamilyData` - M-R-Λ family curves
   - `get_required_parameters() -> list[str]` - List additional parameters
-- Uses Diffrax library with Dormand-Prince 5th order integrator (Dopri5)
+  - Uses Diffrax by default. With the optional `modax-cuda12` extra on CUDA,
+    its forward ODE integrations use a vendored forward-only Modax Tsit5
+    kernel. Diffrax remains mandatory for CPU, unavailable compiler
+    dependencies, and differentiated isolated background integrations. Full
+    ST shooting is not reverse-mode differentiable in either backend.
 - Computes Love number k2 for tidal deformability
 
 **jesterTOV/tov/data_classes.py** - JAX Dataclasses

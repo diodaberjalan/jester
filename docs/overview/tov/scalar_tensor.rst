@@ -54,7 +54,21 @@ using eight slots per EOS to reduce idle lanes. This changes execution layout
 and can introduce small floating-point differences. Points after a bracket
 within its tile may also be evaluated; they do not change bracket selection.
 
-Ordinary background integrations retain relative tolerance 1e-5, absolute
-tolerance 1e-6 and a 500-step ceiling. Temporary accurate local evaluations,
-the residual threshold 1e-4, final tidal integration and strict family-failure
-checks are unchanged. Existing YAML configurations require no additional keys.
+The Diffrax fallback retains relative tolerance 1e-5, absolute tolerance 1e-6
+and a 500-step ceiling for ordinary background integrations. Temporary accurate
+local evaluations, the residual threshold 1e-4, final tidal integration and
+strict family-failure checks are unchanged. Existing YAML configurations require
+no additional keys.
+
+Optional CUDA forward integrator
+-------------------------------
+
+Installing both the ``cuda12`` and ``modax-cuda12`` optional dependencies
+enables the bundled, forward-only Modax Tsit5 CUDA backend for scalar-tensor
+background and tidal integrations. Its validated forward tolerances are
+1e-10/1e-11, with a 3000-step ceiling. The shooting, recovery, EOS
+interpolation, and exterior matching algorithms remain unchanged. Jester
+automatically keeps Diffrax on
+CPU, when the optional compiler dependencies are unavailable, and while JAX is
+tracing a differentiated background integration. Full scalar-tensor shooting
+does not currently support JAX automatic differentiation with either backend.

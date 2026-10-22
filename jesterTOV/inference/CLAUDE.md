@@ -97,6 +97,15 @@ EOS. The accepted field and residual must come from the same evaluated trial;
 final tidal integration and strict family-failure checks remain unchanged.
 Existing YAML configurations need no additional keys.
 
+### Scalar-tensor ODE backend selection
+
+The scalar-tensor solver uses Diffrax by default. Installing the optional
+``modax-cuda12`` extra enables the bundled forward-only Modax Tsit5 backend for
+ordinary CUDA forward integrations. Diffrax remains selected for CPU execution,
+missing optional compiler dependencies, and JAX AD tracers. This is automatic
+and introduces no YAML setting. Full scalar-tensor shooting is not
+reverse-mode differentiable in either backend.
+
 ### Inference Documentation
 
 `tov.stability_branch` defaults to `default` and may be omitted. `first` is
