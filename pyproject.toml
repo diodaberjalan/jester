@@ -88,6 +88,7 @@ jester_extract_gw_posterior_bilby = "jesterTOV.inference.flows.bilby_extract:mai
 [project.optional-dependencies]
 cuda12 = ["jax[cuda12]"]
 modax-cuda12 = [
+    "modax-solvers @ git+https://github.com/lawrenceberry/modax.git@f4687d97ffdeedc789f80ab31fc26ce912f003b5",
     "jax>=0.6.2,<0.8.0",
     "numba-cuda-mlir[cu12]>=0.6.0,<0.7.0; python_version < '3.13'",
 ]
@@ -119,6 +120,19 @@ dev = [
 dev = [
     "nbqa>=1.9.1",
     "ruff>=0.15.0",
+]
+
+# The pinned Modax release requests CUDA 13 on Python >=3.11. Jester's
+# optional backend uses CUDA 12 with JAX <0.8; retain that compiler stack.
+# The wrapper loads only forward Tsit5 code; its unused Enzyme, implicit and
+# sparse solver dependencies are not needed. Installed source is unchanged.
+[[tool.uv.dependency-metadata]]
+name = "modax-solvers"
+version = "0.0.4"
+requires-dist = [
+    "jax>=0.6.2",
+    "numba-cuda-mlir[cu12]>=0.6.0,<0.7.0; python_version < '3.13'",
+    "numpy>=2.2.6",
 ]
 
 [tool.ruff]

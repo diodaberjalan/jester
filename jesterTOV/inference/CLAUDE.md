@@ -100,11 +100,18 @@ Existing YAML configurations need no additional keys.
 ### Scalar-tensor ODE backend selection
 
 The scalar-tensor solver uses Diffrax by default. Installing the optional
-``modax-cuda12`` extra enables the bundled forward-only Modax Tsit5 backend for
+``modax-cuda12`` extra enables the installed, pinned Modax Tsit5 backend for
 ordinary CUDA forward integrations. Diffrax remains selected for CPU execution,
 missing optional compiler dependencies, and JAX AD tracers. This is automatic
 and introduces no YAML setting. Full scalar-tensor shooting is not
 reverse-mode differentiable in either backend.
+
+The Jester wrapper loads only external forward code and applies the existing
+cutoff, per-lane accuracy and failure handling in memory. Keep the pinned
+revision, factory fingerprint and CUDA 12 uv dependency metadata together.
+Do not copy Modax backend source into Jester. Shooting correction and bounded
+root recovery are factored into `tov/scalar_tensor_utils.py`; the compiled
+solve and custom-vmap queue remain in `tov/scalar_tensor.py`.
 
 ### Inference Documentation
 

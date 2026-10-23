@@ -7,6 +7,13 @@ resolution-markers = [
     "python_full_version < '3.12'",
 ]
 
+[manifest]
+
+[[manifest.dependency-metadata]]
+name = "modax-solvers"
+version = "0.0.4"
+requires-dist = ["jax>=0.6.2", "numba-cuda-mlir[cu12]>=0.6.0,<0.7.0 ; python_full_version < '3.13'", "numpy>=2.2.6"]
+
 [[package]]
 name = "absl-py"
 version = "2.4.0"
@@ -1512,6 +1519,7 @@ dev = [
 ]
 modax-cuda12 = [
     { name = "jax" },
+    { name = "modax-solvers" },
     { name = "numba-cuda-mlir", extra = ["cu12"], marker = "python_full_version < '3.13'" },
 ]
 
@@ -1546,6 +1554,7 @@ requires-dist = [
     { name = "jaxtyping" },
     { name = "lalsuite", marker = "extra == 'dev'" },
     { name = "matplotlib", specifier = ">=3.10.7" },
+    { name = "modax-solvers", marker = "extra == 'modax-cuda12'", git = "https://github.com/lawrenceberry/modax.git?rev=f4687d97ffdeedc789f80ab31fc26ce912f003b5" },
     { name = "myst-parser", marker = "extra == 'dev'", specifier = ">=2.0" },
     { name = "nbconvert", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "nbsphinx", marker = "extra == 'dev'", specifier = ">=0.9" },
@@ -1995,6 +2004,16 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/40/49/0f8c498a28c0efa5f5c95a9e374c83ec1385ca41d0e85e7cf40e5d519a21/ml_dtypes-0.5.4-cp313-cp313t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:531eff30e4d368cb6255bc2328d070e35836aa4f282a0fb5f3a0cd7260257298", size = 5366453, upload-time = "2025-11-17T22:32:07.115Z" },
     { url = "https://files.pythonhosted.org/packages/8c/27/12607423d0a9c6bbbcc780ad19f1f6baa2b68b18ce4bddcdc122c4c68dc9/ml_dtypes-0.5.4-cp313-cp313t-win_amd64.whl", hash = "sha256:cb73dccfc991691c444acc8c0012bee8f2470da826a92e3a20bb333b1a7894e6", size = 225612, upload-time = "2025-11-17T22:32:08.615Z" },
     { url = "https://files.pythonhosted.org/packages/e5/80/5a5929e92c72936d5b19872c5fb8fc09327c1da67b3b68c6a13139e77e20/ml_dtypes-0.5.4-cp313-cp313t-win_arm64.whl", hash = "sha256:3bbbe120b915090d9dd1375e4684dd17a20a2491ef25d640a908281da85e73f1", size = 164145, upload-time = "2025-11-17T22:32:09.782Z" },
+]
+
+[[package]]
+name = "modax-solvers"
+version = "0.0.4"
+source = { git = "https://github.com/lawrenceberry/modax.git?rev=f4687d97ffdeedc789f80ab31fc26ce912f003b5#f4687d97ffdeedc789f80ab31fc26ce912f003b5" }
+dependencies = [
+    { name = "jax" },
+    { name = "numba-cuda-mlir", extra = ["cu12"], marker = "python_full_version < '3.13'" },
+    { name = "numpy" },
 ]
 
 [[package]]

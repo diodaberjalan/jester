@@ -1,1 +1,1 @@
-"""Forward-only Modax kernel subset for scalar-tensor integration."""
+"""Jester adapters for the separately installed, forward-only Modax backend."""

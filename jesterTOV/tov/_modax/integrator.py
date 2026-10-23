@@ -7,9 +7,13 @@ import jax.numpy as jnp
 import equinox as eqx
 from jax.extend import core
 from jax.interpreters import batching, mlir
-from ._modax.tsit5 import _solve_impl, KernelOptions
-from ._modax._numba_common import PIDGains, SolveSettings
-from ._modax_rhs import background_rhs, tidal_rhs
+from modax._numba_common import PIDGains, SolveSettings
+from .compat import _SurfaceIntegration, load_forward_tsit5, make_solve_impl
+from .rhs import background_rhs, tidal_rhs
+
+
+tsit5 = load_forward_tsit5()
+_solve_impl = make_solve_impl(tsit5)
 
 
 class Result(eqx.Module):
@@ -34,7 +38,7 @@ def make_solver(rhs, rtol, atol, max_steps):
             jnp.array([0.0, 1.0]),
             flat_p,
             settings=SolveSettings(rtol, atol, 1 / 999, max_steps, None),
-            options=KernelOptions(PIDGains(0.0, 1.0, 0.0), "local"),
+            options=tsit5.KernelOptions(PIDGains(0.0, 1.0, 0.0), "local"),
             return_stats=True,
         )
         final = history[:, -1, :].reshape(leading + (y.shape[-1],))
@@ -50,10 +54,12 @@ def make_solver(rhs, rtol, atol, max_steps):
     primitive.multiple_results = True
     primitive.def_impl(implementation)
     primitive.def_abstract_eval(
-        lambda y, p: (y,)
-        + tuple(
-            jax.core.ShapedArray(y.shape[:-1], jnp.int32)  # type: ignore[reportAttributeAccessIssue]
-            for _ in range(3)
+        lambda y, p: (
+            (y,)
+            + tuple(
+                jax.core.ShapedArray(y.shape[:-1], jnp.int32)  # type: ignore[reportAttributeAccessIssue]
+                for _ in range(3)
+            )
         )
     )
     mlir.register_lowering(
@@ -103,4 +109,20 @@ def integrate(y0, eos, h0, *, accurate=False, is_tidal=False, mass_limit=float("
         jnp.array([jnp.where(valid, 0.0, jnp.nan)]),
         Result(jnp.where(valid, 0, 1)),
         stats,
+    )
+
+
+def surface(y0, h0, dh, eos_dict, accurate, mass_limit, kind) -> _SurfaceIntegration:
+    """Forward-only Modax integration normalized to the shared result type."""
+    solution = integrate(
+        y0,
+        eos_dict,
+        h0,
+        accurate=accurate,
+        is_tidal=(kind == "tidal"),
+        mass_limit=mass_limit if kind != "no_tidal" else float("inf"),
+    )
+    return _SurfaceIntegration(
+        jnp.concatenate(solution.ys),
+        (solution.result._value == 0) & (solution.ts[-1] == 0),
     )

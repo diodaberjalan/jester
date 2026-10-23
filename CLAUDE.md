@@ -195,11 +195,21 @@ value = array.item()  # type: ignore[union-attr]
   - `construct_family(eos_data, ndat, min_nsat, **kwargs) -> FamilyData` - M-R-Λ family curves
   - `get_required_parameters() -> list[str]` - List additional parameters
   - Uses Diffrax by default. With the optional `modax-cuda12` extra on CUDA,
-    its forward ODE integrations use a vendored forward-only Modax Tsit5
-    kernel. Diffrax remains mandatory for CPU, unavailable compiler
+    its forward ODE integrations call an installed, pinned Modax Tsit5
+    package through `tov/_modax/integrator.py`. `tov/_modax/compat.py` applies only
+    Jester's cutoff, accuracy and failure-handling extensions to a private
+    kernel factory in memory; do not vendor Modax or alter its installed files.
+    The uv metadata override keeps its compiler dependencies on CUDA 12.
+    Diffrax remains mandatory for CPU, unavailable compiler
     dependencies, and differentiated isolated background integrations. Full
     ST shooting is not reverse-mode differentiable in either backend.
 - Computes Love number k2 for tidal deformability
+
+Scalar-tensor shooting states, probe selection, local correction and bounded
+root recovery live in the existing `tov/scalar_tensor_utils.py`, alongside
+exterior matching and the NN predictor. `tov/scalar_tensor.py` retains the
+equations, backend dispatch, compiled solve, custom-vmap recovery queue and
+public solver. Preserve JAX execution boundaries when moving helpers.
 
 **jesterTOV/tov/data_classes.py** - JAX Dataclasses
 - `EOSData` - EOS quantities (ns, ps, hs, es, cs2, dloge_dlogps, mu, extra_constraints)

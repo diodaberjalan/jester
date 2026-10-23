@@ -61,10 +61,10 @@ strict family-failure checks are unchanged. Existing YAML configurations require
 no additional keys.
 
 Optional CUDA forward integrator
--------------------------------
+--------------------------------
 
 Installing both the ``cuda12`` and ``modax-cuda12`` optional dependencies
-enables the bundled, forward-only Modax Tsit5 CUDA backend for scalar-tensor
+enables the externally installed, forward-only Modax Tsit5 CUDA backend for scalar-tensor
 background and tidal integrations. Its validated forward tolerances are
 1e-10/1e-11, with a 3000-step ceiling. The shooting, recovery, EOS
 interpolation, and exterior matching algorithms remain unchanged. Jester
@@ -72,3 +72,10 @@ automatically keeps Diffrax on
 CPU, when the optional compiler dependencies are unavailable, and while JAX is
 tracing a differentiated background integration. Full scalar-tensor shooting
 does not currently support JAX automatic differentiation with either backend.
+
+Use ``uv sync --extra cuda12 --extra modax-cuda12`` to install the pinned Modax
+revision with Jester's CUDA 12 dependency metadata. The compatibility wrapper
+specializes the installed kernel factory in memory to preserve mass cutoffs,
+per-trajectory accuracy and failure handling. It checks the factory before
+adapting it and changes neither Modax's installed files nor its global factories.
+No Modax backend source is bundled in Jester.

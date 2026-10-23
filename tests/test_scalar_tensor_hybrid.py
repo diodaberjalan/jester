@@ -2,6 +2,7 @@
 
 import ast
 import inspect
+from types import SimpleNamespace
 
 import jax
 import jax.numpy as jnp
@@ -32,13 +33,12 @@ def test_modax_dispatch_uses_diffrax_without_optional_backend(monkeypatch):
 
 def test_modax_dispatch_uses_diffrax_on_cpu(monkeypatch):
     expected = scalar_tensor._SurfaceIntegration(jnp.ones(5), jnp.array(True))
-    monkeypatch.setattr(scalar_tensor, "_modax_integrator", object())
-    monkeypatch.setattr(scalar_tensor, "_diffrax_surface", lambda *args: expected)
     monkeypatch.setattr(
         scalar_tensor,
-        "_modax_surface",
-        lambda *args: pytest.fail("Modax must not run on CPU"),
+        "_modax_integrator",
+        SimpleNamespace(surface=lambda *args: pytest.fail("Modax must not run on CPU")),
     )
+    monkeypatch.setattr(scalar_tensor, "_diffrax_surface", lambda *args: expected)
     monkeypatch.setattr(scalar_tensor.jax, "default_backend", lambda: "cpu")
 
     result = scalar_tensor._integrate_surface(
@@ -63,13 +63,16 @@ def test_modax_ad_detector_identifies_jvp_and_linearization_tracers():
 
 def test_modax_dispatch_uses_diffrax_while_differentiating(monkeypatch):
     seen = []
-    monkeypatch.setattr(scalar_tensor, "_modax_integrator", object())
-    monkeypatch.setattr(scalar_tensor.jax, "default_backend", lambda: "gpu")
     monkeypatch.setattr(
         scalar_tensor,
-        "_modax_surface",
-        lambda *args: pytest.fail("Modax must not run while differentiating"),
+        "_modax_integrator",
+        SimpleNamespace(
+            surface=lambda *args: pytest.fail(
+                "Modax must not run while differentiating"
+            )
+        ),
     )
+    monkeypatch.setattr(scalar_tensor.jax, "default_backend", lambda: "gpu")
 
     def fake_diffrax(y0, *args):
         seen.append(scalar_tensor._is_differentiating(y0))
