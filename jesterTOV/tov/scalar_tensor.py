@@ -710,14 +710,14 @@ def _compiled_tov_solve_impl(
             )
             beta_ST_safe = jnp.where(jnp.abs(beta_ST) < 1e-25, 1e-25, beta_ST)
 
-            Lambda_T_J = lambda_T * jnp.power(M_inf_final, -5.0)
+            Lambda_T_J = lambda_T * jnp.power(M_inf_jordan, -5.0)
             Lambda_S_J = (
                 (
                     jnp.exp(2 * beta_ST * jnp.power(phi_inf_target, 2))
                     / (4 * jnp.power(beta_ST_safe * phi_inf_target_safe, 2))
                 )
                 * lambda_S
-                * jnp.power(M_inf_final, -5.0)
+                * jnp.power(M_inf_jordan, -5.0)
             )
             Lambda_ST1_J = (
                 (
@@ -725,7 +725,7 @@ def _compiled_tov_solve_impl(
                     / (2 * beta_ST_safe * phi_inf_target_safe)
                 )
                 * lambda_ST1
-                * jnp.power(M_inf_final, -5.0)
+                * jnp.power(M_inf_jordan, -5.0)
             )
             Lambda_ST2_J = (
                 (
@@ -733,7 +733,7 @@ def _compiled_tov_solve_impl(
                     / (2 * beta_ST_safe * phi_inf_target_safe)
                 )
                 * lambda_ST2
-                * jnp.power(M_inf_final, -5.0)
+                * jnp.power(M_inf_jordan, -5.0)
             )
 
             values = (
