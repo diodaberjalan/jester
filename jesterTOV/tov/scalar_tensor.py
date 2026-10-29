@@ -964,6 +964,8 @@ class ScalarTensorTOVSolver(TOVSolverBase):
     ):
         """Reject the whole ST family after any final raw or processed failure."""
         valid = jnp.all(jnp.isfinite(masses) & (masses > 0))
+        # Discontinuous neighboring raw stars indicate a failed family.
+        valid &= jnp.all(jnp.abs(jnp.diff(masses)) <= 0.5 * utils.solar_mass_in_meter)
         valid &= jnp.all(jnp.isfinite(radii) & (radii > 0))
         if self.calculate_tidal:
             valid &= jnp.all(jnp.isfinite(k2s))

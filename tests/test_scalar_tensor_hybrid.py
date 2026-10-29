@@ -685,6 +685,30 @@ def test_whole_family_rejection(monkeypatch, failed_field):
         )
 
 
+@pytest.mark.parametrize(
+    "jump, accepted", [(0.49, True), (0.5, True), (0.51, False), (-0.51, False)]
+)
+def test_mass_jump_rejects_whole_family(monkeypatch, jump, accepted):
+    def process(
+        self, pcs, masses, radii, k2s, ndat, extra=None, stability_branch="default"
+    ):
+        return FamilyData(
+            pcs, jnp.ones(ndat), jnp.ones(ndat), jnp.ones(ndat), {"q": jnp.ones(ndat)}
+        )
+
+    monkeypatch.setattr(TOVSolverBase, "_create_family_data", process)
+    masses = (
+        jnp.array([1.0, 1.0 + jump, 1.0 + jump])
+        * scalar_tensor.utils.solar_mass_in_meter
+    )
+    values = jnp.ones(3)
+    family = ScalarTensorTOVSolver()._create_family_data(
+        values, masses, values, values, 3, {"q": values}
+    )
+    for leaf in jax.tree.leaves(family):
+        assert np.all(np.isfinite(leaf)) if accepted else np.all(np.isnan(leaf))
+
+
 def test_no_tidal_family_allows_intentional_nan_love_numbers(monkeypatch):
     def process(
         self, pcs, masses, radii, k2s, ndat, extra=None, stability_branch="default"
