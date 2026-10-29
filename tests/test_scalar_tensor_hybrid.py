@@ -686,9 +686,20 @@ def test_whole_family_rejection(monkeypatch, failed_field):
 
 
 @pytest.mark.parametrize(
-    "jump, accepted", [(0.49, True), (0.5, True), (0.51, False), (-0.51, False)]
+    "before, after, accepted",
+    [
+        (1.0, 1.49, True),
+        (1.0, 1.5, True),
+        (1.0, 1.51, False),
+        (1.51, 1.0, True),
+        (1.0, 2.5, True),
+        (1.0, 2.51, True),
+        (1.0, 2.49, False),
+        (3.1, 2.49, True),
+        (3.1, 2.5, True),
+    ],
 )
-def test_mass_jump_rejects_whole_family(monkeypatch, jump, accepted):
+def test_mass_jump_rejects_whole_family(monkeypatch, before, after, accepted):
     def process(
         self, pcs, masses, radii, k2s, ndat, extra=None, stability_branch="default"
     ):
@@ -697,10 +708,7 @@ def test_mass_jump_rejects_whole_family(monkeypatch, jump, accepted):
         )
 
     monkeypatch.setattr(TOVSolverBase, "_create_family_data", process)
-    masses = (
-        jnp.array([1.0, 1.0 + jump, 1.0 + jump])
-        * scalar_tensor.utils.solar_mass_in_meter
-    )
+    masses = jnp.array([before, after, after]) * scalar_tensor.utils.solar_mass_in_meter
     values = jnp.ones(3)
     family = ScalarTensorTOVSolver()._create_family_data(
         values, masses, values, values, 3, {"q": values}
