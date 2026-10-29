@@ -675,7 +675,7 @@ def test_whole_family_rejection(monkeypatch, failed_field):
         values,
         bad if failed_field == "k2" else values,
         4,
-        {"q": bad if failed_field == "extra" else values},
+        {"q": bad if failed_field == "extra" else values, "_central_phi": values},
     )
     for leaf in jax.tree.leaves(family):
         assert (
@@ -686,20 +686,27 @@ def test_whole_family_rejection(monkeypatch, failed_field):
 
 
 @pytest.mark.parametrize(
-    "before, after, accepted",
+    "before, after, phi_before, phi_after, accepted",
     [
-        (1.0, 1.49, True),
-        (1.0, 1.5, True),
-        (1.0, 1.51, False),
-        (1.51, 1.0, True),
-        (1.0, 2.5, True),
-        (1.0, 2.51, True),
-        (1.0, 2.49, False),
-        (3.1, 2.49, True),
-        (3.1, 2.5, True),
+        (1.0, 1.49, 0.1, 0.3, True),
+        (1.0, 1.5, 0.1, 0.3, True),
+        (1.0, 1.51, 0.1, 0.3, False),
+        (1.0, 1.51, 0.1, 0.15, True),
+        (1.0, 1.51, 0.1, 0.1 * 10**0.299, True),
+        (1.0, 1.51, 0.1, 0.1 * 10**0.301, False),
+        (1.51, 1.0, 0.1, 0.3, False),
+        (1.0, 2.5, 0.1, 0.3, False),
+        (1.0, 2.51, 0.1, 0.3, False),
+        (1.0, 2.49, 0.1, 0.3, False),
+        (3.1, 2.49, 0.1, 0.3, False),
+        (1.0, 1.01, 0.0, 0.1, False),
+        (1.0, 1.01, -0.1, 0.1, False),
+        (1.0, 1.01, float("nan"), 0.1, False),
     ],
 )
-def test_mass_jump_rejects_whole_family(monkeypatch, before, after, accepted):
+def test_mass_jump_rejects_whole_family(
+    monkeypatch, before, after, phi_before, phi_after, accepted
+):
     def process(
         self, pcs, masses, radii, k2s, ndat, extra=None, stability_branch="default"
     ):
@@ -711,10 +718,36 @@ def test_mass_jump_rejects_whole_family(monkeypatch, before, after, accepted):
     masses = jnp.array([before, after, after]) * scalar_tensor.utils.solar_mass_in_meter
     values = jnp.ones(3)
     family = ScalarTensorTOVSolver()._create_family_data(
-        values, masses, values, values, 3, {"q": values}
+        values,
+        masses,
+        values,
+        values,
+        3,
+        {"q": values, "_central_phi": jnp.array([phi_before, phi_after, phi_after])},
     )
     for leaf in jax.tree.leaves(family):
         assert np.all(np.isfinite(leaf)) if accepted else np.all(np.isnan(leaf))
+
+
+def test_mass_and_field_jumps_must_be_on_same_pair(monkeypatch):
+    def process(
+        self, pcs, masses, radii, k2s, ndat, extra=None, stability_branch="default"
+    ):
+        return FamilyData(pcs, jnp.ones(ndat), jnp.ones(ndat), jnp.ones(ndat), extra)
+
+    monkeypatch.setattr(TOVSolverBase, "_create_family_data", process)
+    values = jnp.ones(3)
+    masses = jnp.array([1.0, 1.6, 1.7]) * scalar_tensor.utils.solar_mass_in_meter
+    family = ScalarTensorTOVSolver()._create_family_data(
+        values,
+        masses,
+        values,
+        values,
+        3,
+        {"q": values, "_central_phi": jnp.array([0.1, 0.11, 0.4])},
+    )
+    assert all(np.all(np.isfinite(leaf)) for leaf in jax.tree.leaves(family))
+    assert "_central_phi" not in family.extra
 
 
 def test_no_tidal_family_allows_intentional_nan_love_numbers(monkeypatch):
@@ -731,6 +764,7 @@ def test_no_tidal_family_allows_intentional_nan_love_numbers(monkeypatch):
         values,
         jnp.full(4, jnp.nan),
         4,
+        {"_central_phi": values},
     )
     assert np.isfinite(family.masses).all()
     assert np.isnan(family.lambdas).all()

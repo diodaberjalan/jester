@@ -813,10 +813,11 @@ def _compiled_tov_solve_impl(
             Lambda_ST1_J,
             Lambda_ST2_J,
             q,
+            phi0_final,
         )
 
     def compute_nan_branch(_):
-        return (jnp.nan, jnp.nan, jnp.nan, jnp.nan, jnp.nan, jnp.nan, jnp.nan)
+        return (jnp.nan, jnp.nan, jnp.nan, jnp.nan, jnp.nan, jnp.nan, jnp.nan, jnp.nan)
 
     return lax.cond(returnNAN, compute_nan_branch, compute_success_branch, operand=None)
 
@@ -833,6 +834,7 @@ def _compiled_tov_solve(
     dloge_dlogps,
     max_iterations=15,
     calculate_tidal=True,
+    return_phi0=False,
 ):
     """Dispatch a scalar-tensor solve while preserving its AD contract.
 
@@ -849,7 +851,7 @@ def _compiled_tov_solve(
             "differentiation; "
             "differentiate an isolated background integration, which uses Diffrax."
         )
-    return _compiled_tov_solve_impl(
+    result = _compiled_tov_solve_impl(
         pc,
         beta_ST,
         phi_inf_target,
@@ -862,6 +864,7 @@ def _compiled_tov_solve(
         max_iterations=max_iterations,
         calculate_tidal=calculate_tidal,
     )
+    return result if return_phi0 else result[:7]
 
 
 class ScalarTensorTOVSolver(TOVSolverBase):
@@ -917,6 +920,7 @@ class ScalarTensorTOVSolver(TOVSolverBase):
             Lambda_ST1_J,
             Lambda_ST2_J,
             q,
+            central_phi,
         ) = _compiled_tov_solve(
             pc,
             beta_ST,
@@ -929,6 +933,7 @@ class ScalarTensorTOVSolver(TOVSolverBase):
             eos_data.dloge_dlogps,
             max_iterations=max_iterations,
             calculate_tidal=self.calculate_tidal,
+            return_phi0=True,
         )
 
         extra = {
@@ -936,6 +941,7 @@ class ScalarTensorTOVSolver(TOVSolverBase):
             "lambda_ST1": Lambda_ST1_J,
             "lambda_ST2": Lambda_ST2_J,
             "q": q,
+            "_central_phi": central_phi,
         }
 
         return TOVSolution(
@@ -964,10 +970,18 @@ class ScalarTensorTOVSolver(TOVSolverBase):
     ):
         """Reject the whole ST family after any final raw or processed failure."""
         valid = jnp.all(jnp.isfinite(masses) & (masses > 0))
-        # An upward jump is inside an increasing-mass interval; a downward
-        # step can separate stable intervals and must not trigger this guard.
-        jump = jnp.diff(masses) > 0.5 * utils.solar_mass_in_meter
-        valid &= ~jnp.any(jump & (masses[1:] < 2.5 * utils.solar_mass_in_meter))
+        # Check adjacent raw stars before unstable intervals are removed.
+        central_phi = extra.get("_central_phi") if extra is not None else None
+        if central_phi is None:
+            valid &= False
+        else:
+            valid &= jnp.all(jnp.isfinite(central_phi) & (central_phi > 0))
+            mass_jump = jnp.abs(jnp.diff(masses)) > 0.5 * utils.solar_mass_in_meter
+            field_jump = jnp.abs(jnp.diff(jnp.log10(central_phi))) > 0.3
+            valid &= ~jnp.any(mass_jump & field_jump)
+            extra = {
+                key: value for key, value in extra.items() if key != "_central_phi"
+            }
         valid &= jnp.all(jnp.isfinite(radii) & (radii > 0))
         if self.calculate_tidal:
             valid &= jnp.all(jnp.isfinite(k2s))
