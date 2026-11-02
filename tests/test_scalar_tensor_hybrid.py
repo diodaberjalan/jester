@@ -439,6 +439,7 @@ def test_recovery_routing_uses_last_trial_and_masks_cutoff_lanes():
     env = dict(
         vars(scalar_tensor),
         make_state=final_state,
+        forced_phi=None,
         max_iterations=15,
         tol=1e-4,
         forward_solver=None,

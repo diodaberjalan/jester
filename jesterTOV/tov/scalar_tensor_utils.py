@@ -753,7 +753,7 @@ def _recover_background(
             jnp.where(right, mid, lo),
             jnp.where(enabled & good & ~right, mid, hi),
             jnp.where(right, value[0], flo),
-            done | (enabled & good & (jnp.abs(value[0]) < 1e-4)),
+            done | (enabled & good & (jnp.abs(value[0]) < 1e-5)),
             bad | (enabled & ~good),
             jnp.where(enabled, mid, root),
             jnp.where(enabled, value, best),

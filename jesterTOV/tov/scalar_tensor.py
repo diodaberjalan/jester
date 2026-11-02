@@ -12,7 +12,7 @@ where the gravitational interaction includes both a metric tensor and a scalar f
 """
 
 import functools
-from typing import Literal, cast
+from typing import Callable, Literal, cast
 import jax
 import jax.numpy as jnp
 from jax import lax
@@ -487,6 +487,7 @@ def _compiled_tov_solve_impl(
     dloge_dlogps,
     max_iterations=15,
     calculate_tidal=True,
+    forced_phi=None,
 ):
 
     # Calculate log_ps_nsat
@@ -543,7 +544,7 @@ def _compiled_tov_solve_impl(
     delta_phi_prime_center = 2.0 * r0
 
     nu0 = 0.0
-    tol = 1e-4
+    tol = 1e-5
 
     def forward_solver(params, accurate=False):
         return _background_forward(
@@ -560,35 +561,50 @@ def _compiled_tov_solve_impl(
             return_recovery_hint=True,
         )
 
-    # Directly evaluate the single phi0 guess
     # Static opt-in flags above select the ten-entry metadata return.
-    state = cast(_LocalRecoveryResult, run_iteration(phi0_guess))
-    (
-        i_final,
-        _,
-        R_final,
-        M_inf_final,
-        phi_inf_final,
-        prev_x_final,
-        _,
-        surface_ok,
-        skip_recovery,
-        recovery_hint,
-    ) = state
-    # prev_x is the phi actually integrated; the other phi is the next proposal.
-    phi0_final = prev_x_final[0]
-    background_ok = surface_ok & (i_final <= max_iterations)
-    background_ok &= jnp.abs(phi_inf_final) < tol
-    background_ok &= jnp.isfinite(phi0_final)
-    # Only the last evaluated trial decides eligibility: an intermediate cutoff
-    # may still be followed by a valid trial during the fast iterations.
-    hit_mass_cutoff = M_inf_final > 7.0 * utils.solar_mass_in_meter
-    needs_recovery = ~background_ok & ~hit_mass_cutoff & ~skip_recovery
-    phi0_final, R_final, M_inf_final, phi_inf_final, background_ok = _deferred_recovery(
-        needs_recovery,
-        (phi0_final, R_final, M_inf_final, phi_inf_final, background_ok),
-        (h0, dh, r0, m0, eos_dict, phi_inf_target, recovery_hint),
+    state = (
+        cast(_LocalRecoveryResult, run_iteration(phi0_guess))
+        if forced_phi is None
+        else None
     )
+    if forced_phi is None:
+        (
+            i_final,
+            _,
+            R_final,
+            M_inf_final,
+            phi_inf_final,
+            prev_x_final,
+            _,
+            surface_ok,
+            skip_recovery,
+            recovery_hint,
+        ) = state
+        # prev_x is the phi actually integrated; the other is the next proposal.
+        phi0_final = prev_x_final[0]
+        background_ok = surface_ok & (i_final <= max_iterations)
+        background_ok &= jnp.abs(phi_inf_final) < tol
+        background_ok &= jnp.isfinite(phi0_final)
+        # Only the last evaluated trial decides eligibility for recovery.
+        hit_mass_cutoff = M_inf_final > 7.0 * utils.solar_mass_in_meter
+        needs_recovery = ~background_ok & ~hit_mass_cutoff & ~skip_recovery
+        phi0_final, R_final, M_inf_final, phi_inf_final, background_ok = (
+            _deferred_recovery(
+                needs_recovery,
+                (phi0_final, R_final, M_inf_final, phi_inf_final, background_ok),
+                (h0, dh, r0, m0, eos_dict, phi_inf_target, recovery_hint),
+            )
+        )
+    else:
+        phi0_final = forced_phi
+        residual, (R_final, M_inf_final), background_ok = forward_solver(
+            jnp.array([forced_phi])
+        )
+        phi_inf_final = residual[0]
+        background_ok &= (
+            jnp.isfinite(forced_phi) & (forced_phi >= 0.1) & (forced_phi <= 0.7)
+        )
+        background_ok &= jnp.abs(phi_inf_final) < tol
     # Failed lanes must also skip the final ODEs when cond is batched by vmap.
     phi0_final = jnp.where(background_ok, phi0_final, jnp.nan)
     returnNAN = ~background_ok
@@ -867,6 +883,162 @@ def _compiled_tov_solve(
     return result if return_phi0 else result[:7]
 
 
+def _multiroot_repair_impl(
+    active: jax.Array,
+    eos: EOSData,
+    pcs: jax.Array,
+    params: dict[str, float],
+    solutions: TOVSolution,
+    calculate_tidal: bool,
+) -> TOVSolution:
+    """Repair a flagged family using the largest positive-slope root on [0.1, 0.7]."""
+    beta = params["beta_ST"]
+    target = params.get("phi_inf_tgt", 1e-3)
+    phi_c = params.get("phi_c", 1.0)
+    grid = jnp.linspace(0.1, 0.7, 121)
+
+    def repair(_):
+        def scan_star(pc):
+            hc = utils.interp_in_logspace(pc, eos.ps, eos.hs)
+            ec = utils.interp_in_logspace(hc, eos.hs, eos.es)
+            dedh = (ec / pc * jnp.interp(hc, eos.hs, eos.dloge_dlogps)) * (ec + pc)
+            dh = -0.001 * hc
+            h0 = hc + dh
+            r0 = jnp.sqrt(3 * (-dh) / (2 * jnp.pi * (ec + 3 * pc)))
+            r0 *= 1 - 0.25 * (ec - 3 * pc - 0.6 * dedh) * (-dh) / (ec + 3 * pc)
+            m0 = 4 * jnp.pi * ec * r0**3 / 3 * (1 - 0.6 * dedh * (-dh) / ec)
+            eos_dict = {
+                "p": eos.ps,
+                "h": eos.hs,
+                "e": eos.es,
+                "dloge_dlogp": eos.dloge_dlogps,
+                "beta_ST": beta,
+                "phi_c": 0.1,
+                "phi_inf_target": target,
+            }
+
+            def evaluate(phi):
+                residual, _, ok = _background_forward(
+                    jnp.array([phi]), False, h0, dh, r0, m0, eos_dict, target
+                )
+                return residual[0], ok
+
+            values, valid = jax.vmap(evaluate)(grid)
+            increasing = valid[:-1] & valid[1:] & (jnp.diff(values) > 0)
+            crossing = increasing & (values[:-1] <= 0) & (values[1:] >= 0)
+            index = jnp.max(jnp.where(crossing, jnp.arange(120), 0))
+            lo, hi = grid[index], grid[index + 1]
+
+            def bisect(_, state):
+                lo, hi, good = state
+                mid = (lo + hi) / 2
+                value, ok = evaluate(mid)
+                return (
+                    jnp.where(ok & (value < 0), mid, lo),
+                    jnp.where(ok & (value >= 0), mid, hi),
+                    good & ok,
+                )
+
+            lo, hi, good = lax.fori_loop(0, 20, bisect, (lo, hi, jnp.any(crossing)))
+            phi = (lo + hi) / 2
+            value, valid_root = evaluate(phi)
+            left, left_ok = evaluate(jnp.maximum(0.1, phi - 1e-5))
+            right, right_ok = evaluate(jnp.minimum(0.7, phi + 1e-5))
+            good &= (
+                valid_root
+                & left_ok
+                & right_ok
+                & (right > left)
+                & (jnp.abs(value) < 1e-5)
+            )
+            # Preserve original points on the same sampled positive-slope section.
+            edges = jnp.arange(120)
+            lower = jnp.max(jnp.where((edges < index) & ~increasing, edges + 1, 0))
+            upper = jnp.min(jnp.where((edges > index) & ~increasing, edges, 120))
+            return jnp.where(good, phi, jnp.nan), grid[lower], grid[upper]
+
+        phi, lower, upper = jax.vmap(scan_star)(pcs)
+        old_phi = solutions.extra["_central_phi"]
+        replace = jnp.isfinite(phi) & (
+            (old_phi < lower)
+            | (old_phi > upper)
+            | ~jnp.isfinite(old_phi)
+            | (old_phi <= 0)
+            | ~jnp.isfinite(solutions.M)
+            | (solutions.M <= 0)
+            | ~jnp.isfinite(solutions.R)
+            | (solutions.R <= 0)
+        )
+
+        def solve_star(pc, field):
+            return _compiled_tov_solve_impl(
+                pc,
+                beta,
+                target,
+                phi_c,
+                eos.ns,
+                eos.ps,
+                eos.hs,
+                eos.es,
+                eos.dloge_dlogps,
+                calculate_tidal=calculate_tidal,
+                forced_phi=field,
+            )
+
+        result = jax.vmap(solve_star)(pcs, jnp.where(replace, phi, jnp.nan))
+        mass, radius, lambda_t, lambda_s, lambda_st1, lambda_st2, q, central_phi = (
+            result
+        )
+        good = jnp.isfinite(mass) & jnp.isfinite(radius)
+        if calculate_tidal:
+            good &= jnp.isfinite(lambda_t)
+        replace &= good
+        updated = TOVSolution(
+            M=jnp.where(replace, mass, solutions.M),
+            R=jnp.where(replace, radius, solutions.R),
+            k2=jnp.where(replace, 1.5 * lambda_t * (mass / radius) ** 5, solutions.k2),
+            extra={
+                key: jnp.where(replace, value, solutions.extra[key])
+                for key, value in (
+                    ("lambda_S", lambda_s),
+                    ("lambda_ST1", lambda_st1),
+                    ("lambda_ST2", lambda_st2),
+                    ("q", q),
+                    ("_central_phi", central_phi),
+                )
+            },
+        )
+        return updated
+
+    return lax.cond(active, repair, lambda _: solutions, operand=None)
+
+
+def _make_multiroot_repair(calculate_tidal: bool) -> Callable[..., TOVSolution]:
+    @custom_vmap
+    def repair(active, eos, pcs, params, solutions):
+        return _multiroot_repair_impl(
+            active, eos, pcs, params, solutions, calculate_tidal
+        )
+
+    @repair.def_vmap
+    def batch(axis_size, in_batched, active, eos, pcs, params, solutions):
+        inputs = jax.tree.map(
+            lambda x, mapped: (
+                x if mapped else jnp.broadcast_to(x, (axis_size,) + jnp.shape(x))
+            ),
+            (active, eos, pcs, params, solutions),
+            tuple(in_batched),
+        )
+        outputs = lax.map(lambda args: repair.fun(*args), inputs)
+        return outputs, jax.tree.map(lambda _: True, outputs)
+
+    return repair
+
+
+_repair_multiroot_tidal = _make_multiroot_repair(True)
+_repair_multiroot_background = _make_multiroot_repair(False)
+
+
 class ScalarTensorTOVSolver(TOVSolverBase):
     r"""
     Scalar-tensor theory TOV solver.
@@ -880,6 +1052,11 @@ class ScalarTensorTOVSolver(TOVSolverBase):
     A worsening negative residual can trigger four additional probes once.
     Unresolved points use GPU-queued grid/bracket recovery, reusing a valid
     negative lower endpoint when an upward search encounters a failed trial.
+    The shooting residual tolerance is 1e-5. After all stars are solved,
+    a family with a joint mass and central-field jump is scanned for the
+    highest positive-slope root between 0.1 and 0.7. Points on a different
+    sampled positive-slope section are replaced when that root converges.
+    Remaining discontinuities invalidate the family.
     Recovery allows 17 boundary refinements and 40 root bisections. Background
     Diffrax fallback tolerances and its 500-step ceiling are unchanged. The
     optional CUDA Modax backend uses tighter validated tolerances. Any final
@@ -957,6 +1134,24 @@ class ScalarTensorTOVSolver(TOVSolverBase):
 
     def get_required_parameters(self) -> list[str]:
         return ["beta_ST", "phi_inf_tgt", "phi_c"]
+
+    def _repair_family_solutions(
+        self,
+        eos_data: EOSData,
+        pcs: jax.Array,
+        tov_params: dict[str, float],
+        solutions: TOVSolution,
+    ) -> TOVSolution:
+        central_phi = solutions.extra["_central_phi"]
+        mass_jump = jnp.abs(jnp.diff(solutions.M)) > 0.5 * utils.solar_mass_in_meter
+        field_jump = jnp.abs(jnp.diff(jnp.log10(central_phi))) > 0.3
+        flagged = jnp.any(mass_jump & field_jump)
+        repair = (
+            _repair_multiroot_tidal
+            if self.calculate_tidal
+            else _repair_multiroot_background
+        )
+        return repair(flagged, eos_data, pcs, tov_params, solutions)
 
     def _create_family_data(
         self,

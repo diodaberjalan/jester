@@ -141,6 +141,7 @@ class TOVSolverBase(ABC):
             return self.solve(eos_data, pc, tov_params)
 
         solutions = jax.vmap(solve_single_pc)(pcs)
+        solutions = self._repair_family_solutions(eos_data, pcs, tov_params, solutions)
 
         # Extract batched results (vmap converts scalar fields to arrays)
         masses: Float[Array, "ndat"] = solutions.M  # type: ignore[assignment]
@@ -165,6 +166,16 @@ class TOVSolverBase(ABC):
             extra=extra_fields,
             **branch_options,
         )
+
+    def _repair_family_solutions(
+        self,
+        eos_data: EOSData,
+        pcs: jax.Array,
+        tov_params: dict[str, float],
+        solutions: TOVSolution,
+    ) -> TOVSolution:
+        """Allow solvers to correct a sequence after neighboring stars are known."""
+        return solutions
 
     def _get_pc_min(self, eos_data: EOSData, min_nsat: float) -> Float[Array, ""]:
         """
