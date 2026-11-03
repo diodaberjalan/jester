@@ -811,15 +811,28 @@ def _compiled_tov_solve_impl(
             )
             return tuple(jnp.where(surface_ok, value, jnp.nan) for value in values)
 
-        (
-            M_inf_jordan,
-            R_jordan,
-            Lambda_T_J,
-            Lambda_S_J,
-            Lambda_ST1_J,
-            Lambda_ST2_J,
-            q,
-        ) = lax.cond(calculate_tidal, compute_tidal, compute_no_tidal, operand=None)
+        # ``calculate_tidal`` is static for this jitted function.  Avoid
+        # tracing the unused ODE/exterior-basis branch.
+        if calculate_tidal:
+            (
+                M_inf_jordan,
+                R_jordan,
+                Lambda_T_J,
+                Lambda_S_J,
+                Lambda_ST1_J,
+                Lambda_ST2_J,
+                q,
+            ) = compute_tidal(None)
+        else:
+            (
+                M_inf_jordan,
+                R_jordan,
+                Lambda_T_J,
+                Lambda_S_J,
+                Lambda_ST1_J,
+                Lambda_ST2_J,
+                q,
+            ) = compute_no_tidal(None)
 
         return (
             M_inf_jordan,
@@ -942,8 +955,12 @@ def _multiroot_repair_impl(
             lo, hi, good = lax.fori_loop(0, 20, bisect, (lo, hi, jnp.any(crossing)))
             phi = (lo + hi) / 2
             value, valid_root = evaluate(phi)
-            left, left_ok = evaluate(jnp.maximum(0.1, phi - 1e-5))
-            right, right_ok = evaluate(jnp.minimum(0.7, phi + 1e-5))
+            slope_fields = jnp.array(
+                [jnp.maximum(0.1, phi - 1e-5), jnp.minimum(0.7, phi + 1e-5)]
+            )
+            slope_values, slope_valid = jax.vmap(evaluate)(slope_fields)
+            left, right = slope_values
+            left_ok, right_ok = slope_valid
             good &= (
                 valid_root
                 & left_ok
