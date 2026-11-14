@@ -474,47 +474,10 @@ def _run_recovery_queue(active, previous, forward_args, *, width: int):
     return outputs
 
 
-@functools.partial(jax.jit, static_argnames=["max_iterations", "calculate_tidal"])
-def _compiled_tov_solve_impl(
-    pc,
-    beta_ST,
-    phi_inf_target,
-    phi0,
-    ns,
-    ps,
-    hs,
-    es,
-    dloge_dlogps,
-    max_iterations=15,
-    calculate_tidal=True,
-    forced_phi=None,
+def _compute_star_initial_data(
+    pc, beta_ST, phi_inf_target, ns, ps, hs, es, dloge_dlogps, phi0_guess
 ):
-
-    # Calculate log_ps_nsat
-    ns_arr = ns
-    log_ps_arr = jnp.log10(ps)
-    sort_idx = jnp.argsort(ns_arr)
-    ns_arr_sorted = ns_arr[sort_idx]
-    log_ps_arr_sorted = log_ps_arr[sort_idx]
-
-    nsat_standard = 0.16
-    fixed_nsat_grid = jnp.logspace(jnp.log10(0.01), jnp.log10(15.0), 20)
-    fixed_ns_grid = fixed_nsat_grid * nsat_standard
-    query_ns_grid = jnp.where(
-        jnp.max(ns_arr_sorted) > 1e10,
-        fixed_ns_grid * utils.fm_inv3_to_geometric,
-        fixed_ns_grid,
-    )
-
-    fixed_log_ps_nsat = jnp.interp(query_ns_grid, ns_arr_sorted, log_ps_arr_sorted)
-
-    log_pc = jnp.log10(pc)
     hc = utils.interp_in_logspace(pc, ps, hs)
-
-    phi0_guess = predict_phi0_last(beta_ST, log_pc, fixed_log_ps_nsat)
-    is_valid = (phi0_guess > 0) & (phi0_guess < 1)
-    phi0_guess = jnp.where(is_valid, phi0_guess, 0.5)
-
     eos_dict = {
         "p": ps,
         "h": hs,
@@ -524,7 +487,6 @@ def _compiled_tov_solve_impl(
         "phi_c": phi0_guess,
         "phi_inf_target": phi_inf_target,
     }
-
     ec = utils.interp_in_logspace(hc, hs, es)
     dedp_c = ec / pc * jnp.interp(hc, hs, dloge_dlogps)
     dhdp_c = 1.0 / (ec + pc)
@@ -542,75 +504,70 @@ def _compiled_tov_solve_impl(
     H0_prime_center = 2.0 * r0
     delta_phi_center = jnp.power(r0, 2)
     delta_phi_prime_center = 2.0 * r0
-
     nu0 = 0.0
-    tol = 1e-5
-
-    def forward_solver(params, accurate=False):
-        return _background_forward(
-            params, accurate, h0, dh, r0, m0, eos_dict, phi_inf_target
-        )
-
-    def run_iteration(phi0_init):
-        return _correct_background_local(
-            forward_solver,
-            phi0_init,
-            max_iterations,
-            tol,
-            return_skip_recovery=True,
-            return_recovery_hint=True,
-        )
-
-    # Static opt-in flags above select the ten-entry metadata return.
-    state = (
-        cast(_LocalRecoveryResult, run_iteration(phi0_guess))
-        if forced_phi is None
-        else None
+    return (
+        hc,
+        h0,
+        dh,
+        r0,
+        m0,
+        nu0,
+        psi0,
+        H0_center,
+        H0_prime_center,
+        delta_phi_center,
+        delta_phi_prime_center,
+        eos_dict,
     )
-    if forced_phi is None:
-        (
-            i_final,
-            _,
-            R_final,
-            M_inf_final,
-            phi_inf_final,
-            prev_x_final,
-            _,
-            surface_ok,
-            skip_recovery,
-            recovery_hint,
-        ) = state
-        # prev_x is the phi actually integrated; the other is the next proposal.
-        phi0_final = prev_x_final[0]
-        background_ok = surface_ok & (i_final <= max_iterations)
-        background_ok &= jnp.abs(phi_inf_final) < tol
-        background_ok &= jnp.isfinite(phi0_final)
-        # Only the last evaluated trial decides eligibility for recovery.
-        hit_mass_cutoff = M_inf_final > 7.0 * utils.solar_mass_in_meter
-        needs_recovery = ~background_ok & ~hit_mass_cutoff & ~skip_recovery
-        phi0_final, R_final, M_inf_final, phi_inf_final, background_ok = (
-            _deferred_recovery(
-                needs_recovery,
-                (phi0_final, R_final, M_inf_final, phi_inf_final, background_ok),
-                (h0, dh, r0, m0, eos_dict, phi_inf_target, recovery_hint),
-            )
-        )
-    else:
-        phi0_final = forced_phi
-        residual, (R_final, M_inf_final), background_ok = forward_solver(
-            jnp.array([forced_phi])
-        )
-        phi_inf_final = residual[0]
-        background_ok &= (
-            jnp.isfinite(forced_phi) & (forced_phi >= 0.1) & (forced_phi <= 0.7)
-        )
-        background_ok &= jnp.abs(phi_inf_final) < tol
-    # Failed lanes must also skip the final ODEs when cond is batched by vmap.
+
+
+def _predict_phi0_guess(pc, beta_ST, ns, ps):
+    ns_arr = ns
+    log_ps_arr = jnp.log10(ps)
+    sort_idx = jnp.argsort(ns_arr)
+    ns_arr_sorted = ns_arr[sort_idx]
+    log_ps_arr_sorted = log_ps_arr[sort_idx]
+
+    nsat_standard = 0.16
+    fixed_nsat_grid = jnp.logspace(jnp.log10(0.01), jnp.log10(15.0), 20)
+    fixed_ns_grid = fixed_nsat_grid * nsat_standard
+    query_ns_grid = jnp.where(
+        jnp.max(ns_arr_sorted) > 1e10,
+        fixed_ns_grid * utils.fm_inv3_to_geometric,
+        fixed_ns_grid,
+    )
+    fixed_log_ps_nsat = jnp.interp(query_ns_grid, ns_arr_sorted, log_ps_arr_sorted)
+    log_pc = jnp.log10(pc)
+    phi0_guess = predict_phi0_last(beta_ST, log_pc, fixed_log_ps_nsat)
+    is_valid = (phi0_guess > 0) & (phi0_guess < 1)
+    return jnp.where(is_valid, phi0_guess, 0.5)
+
+
+@functools.partial(jax.jit, static_argnames=("calculate_tidal",))
+def _finish_surface_and_tidal(
+    r0,
+    m0,
+    h0,
+    dh,
+    nu0,
+    psi0,
+    phi0_final,
+    R_final,
+    M_inf_final,
+    background_ok,
+    beta_ST,
+    phi_inf_target,
+    eos_dict,
+    H0_center,
+    H0_prime_center,
+    delta_phi_center,
+    delta_phi_prime_center,
+    calculate_tidal: bool,
+):
     phi0_final = jnp.where(background_ok, phi0_final, jnp.nan)
     returnNAN = ~background_ok
 
     def compute_success_branch(_):
-
         def compute_tidal(_):
             y0_batched = (
                 jnp.array([r0, r0]),
@@ -640,7 +597,6 @@ def _compiled_tov_solve_impl(
                     y0[7],
                     y0[8],
                 )
-
                 return _integrate_surface(
                     y0_eff, t0_eff, dh, eos_dict, False, M_limit, "tidal"
                 )
@@ -795,60 +751,139 @@ def _compiled_tov_solve_impl(
             values = (M_inf_jordan, R_jordan, jnp.nan, jnp.nan, jnp.nan, jnp.nan, q)
             surface_ok = sol.reached_surface
             surface_ok &= (
-                jnp.all(
-                    jnp.isfinite(
-                        jnp.array(
-                            [
-                                M_inf_jordan,
-                                R_jordan,
-                                q,
-                            ]
-                        )
-                    )
-                )
+                jnp.all(jnp.isfinite(jnp.array([M_inf_jordan, R_jordan, q])))
                 & (M_inf_jordan > 0)
                 & (R_jordan > 0)
             )
             return tuple(jnp.where(surface_ok, value, jnp.nan) for value in values)
 
-        # ``calculate_tidal`` is static for this jitted function.  Avoid
-        # tracing the unused ODE/exterior-basis branch.
         if calculate_tidal:
-            (
-                M_inf_jordan,
-                R_jordan,
-                Lambda_T_J,
-                Lambda_S_J,
-                Lambda_ST1_J,
-                Lambda_ST2_J,
-                q,
-            ) = compute_tidal(None)
+            vals = compute_tidal(None)
         else:
-            (
-                M_inf_jordan,
-                R_jordan,
-                Lambda_T_J,
-                Lambda_S_J,
-                Lambda_ST1_J,
-                Lambda_ST2_J,
-                q,
-            ) = compute_no_tidal(None)
-
-        return (
-            M_inf_jordan,
-            R_jordan,
-            Lambda_T_J,
-            Lambda_S_J,
-            Lambda_ST1_J,
-            Lambda_ST2_J,
-            q,
-            phi0_final,
-        )
+            vals = compute_no_tidal(None)
+        return vals + (phi0_final,)
 
     def compute_nan_branch(_):
         return (jnp.nan, jnp.nan, jnp.nan, jnp.nan, jnp.nan, jnp.nan, jnp.nan, jnp.nan)
 
     return lax.cond(returnNAN, compute_nan_branch, compute_success_branch, operand=None)
+
+
+@functools.partial(jax.jit, static_argnames=["max_iterations", "calculate_tidal"])
+def _compiled_tov_solve_impl(
+    pc,
+    beta_ST,
+    phi_inf_target,
+    phi0,
+    ns,
+    ps,
+    hs,
+    es,
+    dloge_dlogps,
+    max_iterations=15,
+    calculate_tidal=True,
+    forced_phi=None,
+):
+    phi0_guess = (
+        _predict_phi0_guess(pc, beta_ST, ns, ps) if forced_phi is None else forced_phi
+    )
+    (
+        _hc,
+        h0,
+        dh,
+        r0,
+        m0,
+        nu0,
+        psi0,
+        H0_center,
+        H0_prime_center,
+        delta_phi_center,
+        delta_phi_prime_center,
+        eos_dict,
+    ) = _compute_star_initial_data(
+        pc, beta_ST, phi_inf_target, ns, ps, hs, es, dloge_dlogps, phi0_guess
+    )
+    tol = 1e-5
+
+    def forward_solver(params, accurate=False):
+        return _background_forward(
+            params, accurate, h0, dh, r0, m0, eos_dict, phi_inf_target
+        )
+
+    state = (
+        cast(
+            _LocalRecoveryResult,
+            _correct_background_local(
+                forward_solver,
+                phi0_guess,
+                max_iterations,
+                tol,
+                return_skip_recovery=True,
+                return_recovery_hint=True,
+            ),
+        )
+        if forced_phi is None
+        else None
+    )
+    if forced_phi is None:
+        (
+            i_final,
+            _,
+            R_final,
+            M_inf_final,
+            phi_inf_final,
+            prev_x_final,
+            _,
+            surface_ok,
+            skip_recovery,
+            recovery_hint,
+        ) = state
+        phi0_final = prev_x_final[0]
+        background_ok = surface_ok & (i_final <= max_iterations)
+        background_ok &= jnp.abs(phi_inf_final) < tol
+        background_ok &= jnp.isfinite(phi0_final)
+        hit_mass_cutoff = M_inf_final > 7.0 * utils.solar_mass_in_meter
+        needs_recovery = ~background_ok & ~hit_mass_cutoff & ~skip_recovery
+        phi0_final, R_final, M_inf_final, phi_inf_final, background_ok = (
+            _deferred_recovery(
+                needs_recovery,
+                (phi0_final, R_final, M_inf_final, phi_inf_final, background_ok),
+                (h0, dh, r0, m0, eos_dict, phi_inf_target, recovery_hint),
+            )
+        )
+    else:
+        phi0_final = forced_phi
+        residual, (R_final, M_inf_final), background_ok = forward_solver(
+            jnp.array([forced_phi])
+        )
+        phi_inf_final = residual[0]
+        background_ok &= (
+            jnp.isfinite(forced_phi) & (forced_phi >= 0.1) & (forced_phi <= 0.7)
+        )
+        background_ok &= jnp.abs(phi_inf_final) < tol
+
+    phi0_final = jnp.where(background_ok, phi0_final, jnp.nan)
+    returnNAN = ~background_ok
+    return _finish_surface_and_tidal(
+        r0,
+        m0,
+        h0,
+        dh,
+        nu0,
+        psi0,
+        phi0_final,
+        R_final,
+        M_inf_final,
+        ~returnNAN,
+        beta_ST,
+        phi_inf_target,
+        eos_dict,
+        H0_center,
+        H0_prime_center,
+        delta_phi_center,
+        delta_phi_prime_center,
+        calculate_tidal,
+    )
 
 
 def _compiled_tov_solve(
@@ -954,13 +989,12 @@ def _multiroot_repair_impl(
 
             lo, hi, good = lax.fori_loop(0, 20, bisect, (lo, hi, jnp.any(crossing)))
             phi = (lo + hi) / 2
-            value, valid_root = evaluate(phi)
-            slope_fields = jnp.array(
-                [jnp.maximum(0.1, phi - 1e-5), jnp.minimum(0.7, phi + 1e-5)]
+            check_fields = jnp.array(
+                [phi, jnp.maximum(0.1, phi - 1e-5), jnp.minimum(0.7, phi + 1e-5)]
             )
-            slope_values, slope_valid = jax.vmap(evaluate)(slope_fields)
-            left, right = slope_values
-            left_ok, right_ok = slope_valid
+            check_values, check_valid = jax.vmap(evaluate)(check_fields)
+            value, left, right = check_values
+            valid_root, left_ok, right_ok = check_valid
             good &= (
                 valid_root
                 & left_ok
@@ -1030,6 +1064,44 @@ def _multiroot_repair_impl(
     return lax.cond(active, repair, lambda _: solutions, operand=None)
 
 
+def _run_multiroot_queue(
+    repair: Callable[..., TOVSolution],
+    active: jax.Array,
+    eos: EOSData,
+    pcs: jax.Array,
+    params: dict[str, float],
+    solutions: TOVSolution,
+    *,
+    width: int,
+) -> TOVSolution:
+    """Process flagged families in fixed-width batches; preserve unflagged output."""
+    axis_size = active.shape[0]
+    count = jnp.sum(active, dtype=jnp.int32)
+    indices = jnp.nonzero(active, size=axis_size, fill_value=0)[0]
+    width = min(width, axis_size)
+    indices = jnp.pad(indices, (0, width))
+
+    def condition(state):
+        offset, _ = state
+        return offset < count
+
+    def step(state):
+        offset, output = state
+        ids = lax.dynamic_slice_in_dim(indices, offset, width)
+        enabled = offset + jnp.arange(width) < count
+        args = jax.tree.map(lambda value: value[ids], (eos, pcs, params, solutions))
+        repaired = jax.vmap(repair)(enabled, *args)
+        targets = jnp.where(enabled, ids, axis_size)
+        output = jax.tree.map(
+            lambda dst, value: dst.at[targets].set(value, mode="drop"),
+            output,
+            repaired,
+        )
+        return offset + width, output
+
+    return lax.while_loop(condition, step, (jnp.int32(0), solutions))[1]
+
+
 def _make_multiroot_repair(calculate_tidal: bool) -> Callable[..., TOVSolution]:
     @custom_vmap
     def repair(active, eos, pcs, params, solutions):
@@ -1046,7 +1118,7 @@ def _make_multiroot_repair(calculate_tidal: bool) -> Callable[..., TOVSolution]:
             (active, eos, pcs, params, solutions),
             tuple(in_batched),
         )
-        outputs = lax.map(lambda args: repair.fun(*args), inputs)
+        outputs = _run_multiroot_queue(repair.fun, *inputs, width=16)
         return outputs, jax.tree.map(lambda _: True, outputs)
 
     return repair

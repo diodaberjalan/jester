@@ -56,7 +56,7 @@ within its tile may also be evaluated; they do not change bracket selection.
 
 The Diffrax fallback retains relative tolerance 1e-5, absolute tolerance 1e-6
 and a 500-step ceiling for ordinary background integrations. Temporary accurate
-local evaluations, the residual threshold 1e-4, final tidal integration and
+local evaluations, the residual threshold 1e-5, final tidal integration and
 strict family-failure checks are unchanged. Existing YAML configurations require
 no additional keys.
 
@@ -78,4 +78,12 @@ revision with Jester's CUDA 12 dependency metadata. The compatibility wrapper
 specializes the installed kernel factory in memory to preserve mass cutoffs,
 per-trajectory accuracy and failure handling. It checks the factory before
 adapting it and changes neither Modax's installed files nor its global factories.
-No Modax backend source is bundled in Jester.
+No Modax backend source is bundled in Jester. When setting ``JAX_PLATFORMS``
+for BlackJAX SMC explicitly, include both devices (``cuda,cpu``), because the
+progress callback requires a CPU device.
+
+Flagged multi-root families use a compact, fixed-width queue on both Modax
+and Diffrax. Unflagged families retain their original solutions, and the
+existing root search and family checks still apply. Changing the batch shape
+can affect borderline Diffrax solutions because of floating-point numerical
+sensitivity. This optimization adds no configuration fields.

@@ -85,3 +85,49 @@ def test_missing_root_keeps_original_for_family_validation(monkeypatch):
     np.testing.assert_array_equal(
         actual.extra["_central_phi"], sol.extra["_central_phi"]
     )
+
+
+@pytest.mark.parametrize("size", [1, 7, 16, 17, 33])
+@pytest.mark.parametrize("pattern", ["none", "all", "sparse"])
+def test_compact_multiroot_queue_preserves_order_and_padding(size, pattern):
+    indices = jnp.arange(size, dtype=float)
+    active = {
+        "none": jnp.zeros(size, dtype=bool),
+        "all": jnp.ones(size, dtype=bool),
+        "sparse": (jnp.arange(size) % 3 == 1),
+    }[pattern]
+    eos = {"value": indices * 10}
+    pcs = jnp.stack([indices, indices + 1], axis=1)
+    params = {"beta_ST": indices + 0.25}
+    solutions = TOVSolution(indices, indices + 1, indices + 2, {"q": indices + 3})
+
+    def repair(enabled, eos_value, pc_value, param_value, old):
+        increment = eos_value["value"] + pc_value[0] + param_value["beta_ST"]
+        return jax.tree.map(
+            lambda value: jnp.where(enabled, value + increment, value), old
+        )
+
+    def run(mask, e, p, param, sol):
+        return st._run_multiroot_queue(repair, mask, e, p, param, sol, width=16)
+
+    got = jax.jit(run)(active, eos, pcs, params, solutions)
+    expected = jax.vmap(repair)(active, eos, pcs, params, solutions)
+    jax.tree.map(np.testing.assert_array_equal, got, expected)
+
+
+def test_compact_multiroot_queue_supports_nested_vmap():
+    def run(active):
+        n = active.shape[0]
+        x = jnp.arange(n, dtype=float)
+        sol = TOVSolution(x, x + 1, x + 2, {"q": x + 3})
+
+        def repair(enabled, eos, pcs, params, old):
+            return jax.tree.map(lambda value: jnp.where(enabled, value + 5, value), old)
+
+        return st._run_multiroot_queue(
+            repair, active, {"e": x}, x, {"beta": x}, sol, width=16
+        )
+
+    active = jnp.array([[False, True, False], [True, False, True]])
+    result = jax.jit(jax.vmap(run))(active)
+    np.testing.assert_array_equal(result.M, jnp.arange(3) + 5 * active)
