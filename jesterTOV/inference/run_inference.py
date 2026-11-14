@@ -893,15 +893,12 @@ def cli_entry_point() -> None:
         )
         sys.exit(1)
 
+    from jesterTOV._native_stderr import filter_xla_cost_model_warning
+
     config_path = sys.argv[1]
-    main(config_path)
+    with filter_xla_cost_model_warning():
+        main(config_path)
 
 
 if __name__ == "__main__":
-    import sys
-
-    if len(sys.argv) != 2:
-        logger.error("Usage: python -m jesterTOV.inference.run_inference <config.yaml>")
-        sys.exit(1)
-
-    main(sys.argv[1])
+    cli_entry_point()
